@@ -11,7 +11,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "lint": "eslint .",
-    "test": "vitest run",
+    "test": "vitest run --no-file-parallelism",
     "dev": "pnpm --parallel --filter @sistema-reservas/api --filter @sistema-reservas/web dev",
     "db:up": "docker compose up -d db db-test",
     "db:down": "docker compose down"

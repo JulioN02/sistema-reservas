@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { fileURLToPath } from "node:url";
 import { and, eq, sql } from "drizzle-orm";
 import { createDb, type Database } from "../db";
 import { clientes, tenants } from "../db/schema";
@@ -50,9 +51,12 @@ async function limpiarBd(db: Database): Promise<void> {
   );
 }
 
+/** Ruta absoluta a apps/api/drizzle, independiente del cwd (F-02). */
+const MIGRATIONS_DIR = fileURLToPath(new URL("../../drizzle", import.meta.url));
+
 async function prepararBd(): Promise<Database> {
   const db = createDb(TEST_DATABASE_URL);
-  await migrate(db, { migrationsFolder: "./drizzle" });
+  await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
   await limpiarBd(db);
   await seedDatabase(TEST_DATABASE_URL);
   return db;

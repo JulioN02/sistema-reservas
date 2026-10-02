@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
+import { fileURLToPath } from "node:url";
 import { count, eq } from "drizzle-orm";
 import { createDb } from "../db";
 import {
@@ -22,9 +23,12 @@ const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ??
   "postgres://postgres:postgres@localhost:5433/sistema_reservas_test";
 
+/** Ruta absoluta a apps/api/drizzle, independiente del cwd (F-02). */
+const MIGRATIONS_DIR = fileURLToPath(new URL("../../drizzle", import.meta.url));
+
 async function aplicarMigraciones(): Promise<void> {
   const db = createDb(TEST_DATABASE_URL);
-  await migrate(db, { migrationsFolder: "./drizzle" });
+  await migrate(db, { migrationsFolder: MIGRATIONS_DIR });
 }
 
 describe.skipIf(!process.env.TEST_DATABASE_URL)("seed (INT-S2)", () => {
