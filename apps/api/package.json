@@ -17,10 +17,15 @@
     "db:seed": "tsx src/db/seed.ts"
   },
   "dependencies": {
-    "@sistema-reservas/contracts": "workspace:*"
+    "@sistema-reservas/contracts": "workspace:*",
+    "fastify": "^5.12.5",
+    "pg": "^8.23.1",
+    "pino": "^9.14.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
+    "@types/pg": "^8.23.1",
     "tsx": "^4.19.0"
   }
 }
