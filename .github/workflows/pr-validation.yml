@@ -1,0 +1,75 @@
+name: PR Validation
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+
+jobs:
+  check-issue-reference:
+    name: Check Issue Reference
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify PR body contains issue reference
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if ! echo "$PR_BODY" | grep -qiE '(closes|fixes|resolves) #[0-9]+'; then
+            echo "::error::PR body must contain 'Closes #N' referencing an issue"
+            exit 1
+          fi
+          echo "Issue reference found"
+
+  check-issue-approved:
+    name: Check Issue Has status:approved
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify linked issue has status:approved
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          ISSUE_NUM=$(echo "$PR_BODY" | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | head -1)
+          if [ -z "$ISSUE_NUM" ]; then
+            echo "::error::No issue number found in PR body"
+            exit 1
+          fi
+          LABELS=$(gh issue view "$ISSUE_NUM" --json labels --jq '.labels[].name' 2>/dev/null || true)
+          if ! echo "$LABELS" | grep -q "status:approved"; then
+            echo "::error::Linked issue #$ISSUE_NUM does not have status:approved label"
+            exit 1
+          fi
+          echo "Issue #$ISSUE_NUM approved"
+
+  check-type-label:
+    name: Check PR Has type:* Label
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify exactly one type:* label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TYPE_LABELS=$(gh pr view "${{ github.event.pull_request.number }}" --json labels --jq '[.labels[].name | select(startswith("type:"))] | length')
+          if [ "$TYPE_LABELS" -ne 1 ]; then
+            echo "::error::PR must have exactly one 'type:*' label (found: $TYPE_LABELS)"
+            exit 1
+          fi
+          echo "Exactly one type:* label present"
+
+  shellcheck:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run shellcheck on modified scripts
+        run: |
+          if ls scripts/*.sh 2>/dev/null; then
+            shellcheck scripts/*.sh
+          else
+            echo "No shell scripts found — shellcheck skipped"
+          fi
