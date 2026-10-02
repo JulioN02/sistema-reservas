@@ -16,6 +16,13 @@
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "eslint src",
-    "test": "vitest run"
+    "test": "vitest run",
+    "generate:types": "openapi-typescript openapi.yaml -o src/generated/api.ts",
+    "lint:contract": "redocly lint openapi.yaml --config redocly.yaml"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^1.34.0",
+    "openapi-typescript": "^7.6.0",
+    "yaml": "^2.7.0"
   }
 }

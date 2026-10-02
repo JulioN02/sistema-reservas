@@ -1,0 +1,1399 @@
+openapi: 3.1.0
+info:
+  title: Sistema de Reservas API
+  version: 1.0.0
+  description: >
+    Contrato OpenAPI 3.1 del Sistema de Reservas (v1).
+
+    API-first (INT-05): todo bajo `/api/v1`. Los errores siguen RFC 7807
+    (`application/problem+json`). Los `type` URI usan el dominio base
+    `https://sistema-reservas.example.com/problems` (placeholder de despliegue).
+
+    Convenciones:
+    - `slot_key` = `<fecha_hora_inicio_utc_ISO8601>|<servicio_id>` (URL-encoded en query).
+    - Identificadores de dominio en español (AD-07).
+    - El tenant público se resuelve de `DEFAULT_TENANT_SLUG`; nunca se expone
+      `tenant_id` en respuestas públicas (CA-INT-04).
+servers:
+  - url: /api/v1
+    description: Base del API v1 (mismo origen que el despliegue).
+tags:
+  - name: publico
+    description: Flujo público de reserva (sin sesión).
+  - name: auth
+    description: Autenticación del negocio (email + contraseña, cookie de sesión).
+  - name: negocio
+    description: Gestión del negocio (sesión obligatoria; 401 sin cookie).
+  - name: metricas
+    description: Métricas del negocio.
+  - name: salud
+    description: Salud de la infraestructura.
+paths:
+  /servicios:
+    get:
+      operationId: listarServicios
+      summary: Lista los servicios activos (público) o todos (negocio)
+      description: >
+        Sin sesión devuelve `ServicioPublico[]`. Con sesión de negocio devuelve
+        `Servicio[]` (incluye parámetros de configuración).
+      security:
+        - {}
+        - cookieAuth: []
+      tags: [publico, negocio]
+      responses:
+        "200":
+          description: Listado de servicios.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: array
+                    items:
+                      $ref: "#/components/schemas/ServicioPublico"
+                  - type: array
+                    items:
+                      $ref: "#/components/schemas/Servicio"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /agenda:
+    get:
+      operationId: calcularAgenda
+      summary: Calcula los slots disponibles de un servicio en un rango de fechas
+      description: >
+        Slots = proyección calculada (horarios − bloques − turnos activos),
+        nunca una tabla persistida (RB-AGD-07). Sin sesión; el tenant se
+        resuelve de `DEFAULT_TENANT_SLUG`.
+      tags: [publico]
+      parameters:
+        - name: servicio_id
+          in: query
+          required: true
+          description: Identificador del servicio.
+          schema:
+            type: string
+            format: uuid
+        - name: desde
+          in: query
+          required: true
+          description: Fecha inicial (inclusive) en formato YYYY-MM-DD (zona del negocio).
+          schema:
+            type: string
+            format: date
+        - name: hasta
+          in: query
+          required: true
+          description: Fecha final (exclusive) en formato YYYY-MM-DD (zona del negocio).
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Agenda calculada por día, en la zona horaria del negocio.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgendaResponse"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /turnos:
+    post:
+      operationId: crearTurno
+      summary: Crea una reserva (flujo público o en nombre del cliente desde el negocio)
+      description: >
+        Claim atómico del slot: mutex por tenant + chequeo de solapamiento de
+        intervalos + índice único parcial como red final (RB-RST-01). Ante
+        conflicto → 409 con hasta 3 alternativas (RB-RST-02). El consentimiento
+        del cliente es obligatorio (PRV-01).
+      security:
+        - {}
+        - cookieAuth: []
+      tags: [publico, negocio]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TurnoCrearInput"
+      responses:
+        "201":
+          description: Reserva creada en estado `pendiente`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TurnoCreado"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "409":
+          description: Slot ocupado o solapamiento con un turno activo.
+          content:
+            application/problem+json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      alternativas:
+                        type: array
+                        maxItems: 3
+                        items:
+                          type: string
+                        description: Hasta 3 slot_key alternativos posteriores al solicitado.
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+    get:
+      operationId: historialTurnos
+      summary: Historial de turnos del negocio con filtros
+      description: >
+        Sesión obligatoria. Filtros opcionales por estado y rango de fechas;
+        ordenado descendente por fecha de inicio.
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      parameters:
+        - name: estado
+          in: query
+          required: false
+          description: Filtro por estado del turno.
+          schema:
+            $ref: "#/components/schemas/TurnoEstado"
+        - name: desde
+          in: query
+          required: false
+          description: Límite inferior del rango (inclusive, UTC).
+          schema:
+            type: string
+            format: date-time
+        - name: hasta
+          in: query
+          required: false
+          description: Límite superior del rango (inclusive, UTC).
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Lista de turnos del tenant, ordenada por inicio descendente.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TurnoResumen"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /turnos/{token}:
+    get:
+      operationId: obtenerTurnoPorToken
+      summary: Consulta el estado de un turno mediante el enlace de gestión
+      description: >
+        El token deriva el turno → tenant implícito, sin exponer `tenant_id`
+        (RB-INT-02). Token desconocido → 404; expirado o turno terminal → 410
+        (RB-CMR-01, CMR-S3).
+      tags: [publico]
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: Token opaco de gestión (32 bytes, base64url).
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9_-]+$"
+            minLength: 32
+      responses:
+        "200":
+          description: Datos mínimos del turno para la página de gestión.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TurnoGestion"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "410":
+          $ref: "#/components/responses/Expirado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /turnos/{token}/confirmar:
+    post:
+      operationId: confirmarTurno
+      summary: Confirma un turno con el enlace de gestión (idempotente)
+      description: >
+        UPDATE condicional `estado='confirmado' WHERE estado='pendiente'`
+        (RB-CMR-02). Ya confirmado → 200 sin evento duplicado (CA-CMR-01).
+      tags: [publico]
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9_-]+$"
+            minLength: 32
+      responses:
+        "200":
+          description: Turno confirmado (o ya confirmado).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TurnoAccionResultado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "410":
+          $ref: "#/components/responses/Expirado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /turnos/{token}/cancelar:
+    post:
+      operationId: cancelarTurno
+      summary: Cancela un turno con el enlace de gestión (idempotente)
+      description: >
+        Solo dentro de la gracia del servicio (RB-CRG-01); fuera de gracia →
+        403 con el canal de contacto del negocio y el turno intacto
+        (RB-CRG-02, CA-CRG-02). Turno ya cancelado → 200 sin evento duplicado
+        (RB-CRG-08).
+      tags: [publico]
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9_-]+$"
+            minLength: 32
+      responses:
+        "200":
+          description: Turno cancelado (o ya cancelado).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TurnoAccionResultado"
+        "403":
+          $ref: "#/components/responses/Prohibido"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "410":
+          $ref: "#/components/responses/Expirado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /turnos/{token}/reagendar:
+    post:
+      operationId: reagendarTurno
+      summary: Reagenda un turno con el enlace de gestión a un nuevo slot
+      description: >
+        Mismo turno (mismo id, cliente y servicio) con nueva fecha/hora; cambio
+        atómico: libera el slot anterior y reclama el nuevo en la misma
+        transacción (RB-CRG-04, CA-CRG-03). Slot ocupado → 409 con alternativas
+        conservando el horario original (CRG-S5).
+      tags: [publico]
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[A-Za-z0-9_-]+$"
+            minLength: 32
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slot_key]
+              properties:
+                slot_key:
+                  type: string
+                  description: Nuevo slot solicitado (`<inicio_utc ISO8601>|<servicio_id>`).
+      responses:
+        "200":
+          description: Turno reagendado con su nuevo horario.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TurnoAccionResultado"
+        "403":
+          $ref: "#/components/responses/Prohibido"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "410":
+          $ref: "#/components/responses/Expirado"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /turnos/{id}:
+    get:
+      operationId: detalleTurno
+      summary: Detalle de un turno del negocio
+      description: >
+        Sesión obligatoria. Turno de otro tenant → 404 (INT-S1).
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Detalle completo del turno.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TurnoDetalle"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /turnos/{id}/acciones:
+    post:
+      operationId: accionTurno
+      summary: Ejecuta una acción de negocio sobre un turno
+      description: >
+        Sesión obligatoria. `motivo` obligatorio para cancelar (CA-CRG-04).
+        `no_show` solo desde inicio + 30 min (RB-VNG-02); `completado` desde el
+        inicio (RB-VNG-03). Estados terminales rechazados (EC-12).
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccionTurnoInput"
+      responses:
+        "200":
+          description: Acción aplicada.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TurnoAccionResultado"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /auth/login:
+    post:
+      operationId: loginOperador
+      summary: Inicia sesión del operador del negocio
+      description: >
+        Sesión opaca (token 32 bytes, hash sha256 en BD), cookie `sid` httpOnly
+        + SameSite=Lax + Secure en producción, TTL 7 días (RB-VNG-05). 5
+        intentos fallidos → 429 con bloqueo de 15 min (VNG-S2).
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CredencialesLogin"
+      responses:
+        "200":
+          description: "Sesión creada; `Set-Cookie: sid=...`."
+          headers:
+            Set-Cookie:
+              description: Cookie de sesión opaca.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperadorSesion"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "429":
+          $ref: "#/components/responses/DemasiadasPeticiones"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /auth/logout:
+    post:
+      operationId: logoutOperador
+      summary: Revoca la sesión actual
+      tags: [auth]
+      security:
+        - cookieAuth: []
+      responses:
+        "204":
+          description: Sesión revocada.
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /auth/me:
+    get:
+      operationId: operadorActual
+      summary: Datos del operador con sesión activa
+      tags: [auth]
+      security:
+        - cookieAuth: []
+      responses:
+        "200":
+          description: Operador autenticado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperadorSesion"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /agenda/horarios:
+    get:
+      operationId: listarHorarios
+      summary: Lista los horarios recurrentes del negocio
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      responses:
+        "200":
+          description: Horarios recurrentes del tenant.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Horario"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+    post:
+      operationId: crearHorario
+      summary: Crea un horario recurrente
+      description: >
+        Se rechaza con 409 si solapa otro horario del mismo día (RB-AGD-01),
+        validado bajo el lock del tenant.
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HorarioInput"
+      responses:
+        "201":
+          description: Horario creado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Horario"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /agenda/horarios/{id}:
+    put:
+      operationId: actualizarHorario
+      summary: Actualiza un horario recurrente
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/HorarioInput"
+      responses:
+        "200":
+          description: Horario actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Horario"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+    delete:
+      operationId: eliminarHorario
+      summary: Elimina un horario recurrente
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Horario eliminado.
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /agenda/bloques:
+    get:
+      operationId: listarBloques
+      summary: Lista los bloques de indisponibilidad del negocio
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      responses:
+        "200":
+          description: Bloques del tenant.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Bloque"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+    post:
+      operationId: crearBloque
+      summary: Crea un bloque de indisponibilidad
+      description: >
+        Si el bloque solapa turnos pendiente/confirmado se rechaza con 409 y
+        detalle de los turnos afectados (RB-AGD-03, AGD-S7).
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BloqueInput"
+      responses:
+        "201":
+          description: Bloque creado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Bloque"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /agenda/bloques/{id}:
+    delete:
+      operationId: eliminarBloque
+      summary: Elimina un bloque de indisponibilidad
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Bloque eliminado.
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /agenda/dia:
+    get:
+      operationId: agendaDelDia
+      summary: Turnos del día en orden cronológico (zona del negocio)
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      parameters:
+        - name: fecha
+          in: query
+          required: true
+          description: Fecha del día en formato YYYY-MM-DD (zona del negocio).
+          schema:
+            type: string
+            format: date
+      responses:
+        "200":
+          description: Turnos del día, cronológicos, en hora local del negocio.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TurnoResumen"
+        "400":
+          $ref: "#/components/responses/SolicitudInvalida"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /servicios/{id}:
+    put:
+      operationId: actualizarServicio
+      summary: Actualiza un servicio
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServicioInput"
+      responses:
+        "200":
+          description: Servicio actualizado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Servicio"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+    delete:
+      operationId: eliminarServicio
+      summary: Elimina un servicio
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Servicio eliminado.
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "409":
+          $ref: "#/components/responses/Conflicto"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /servicios/{id}/parametros:
+    patch:
+      operationId: actualizarParametrosServicio
+      summary: Actualiza los parámetros de reserva de un servicio
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServicioParametrosInput"
+      responses:
+        "200":
+          description: Parámetros actualizados.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Servicio"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /metricas/resumen:
+    get:
+      operationId: resumenMetricas
+      summary: Resumen de los 4 KPIs del negocio
+      description: >
+        Sesión obligatoria. KPI 1: reservas por semana ISO (8 semanas, zona del
+        negocio). KPI 2: tasa de no-show (4 semanas, estados terminales).
+        KPI 3: ocupación de la semana actual (nulo sin horarios). KPI 4:
+        cancelaciones (4 semanas, cantidad y tasa).
+      security:
+        - cookieAuth: []
+      tags: [metricas]
+      parameters:
+        - name: desde
+          in: query
+          required: false
+          description: Límite inferior del período (UTC).
+          schema:
+            type: string
+            format: date-time
+        - name: hasta
+          in: query
+          required: false
+          description: Límite superior del período (UTC).
+          schema:
+            type: string
+            format: date-time
+      responses:
+        "200":
+          description: Resumen de métricas.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MetricasResumen"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+  /health:
+    get:
+      operationId: health
+      summary: Estado de salud del servicio
+      tags: [salud]
+      responses:
+        "200":
+          description: El servicio responde y reporta el estado de la base de datos.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sid
+      description: Cookie de sesión opaca del operador del negocio.
+  responses:
+    SolicitudInvalida:
+      description: Petición mal formada (parámetros de query inválidos).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Validacion:
+      description: >
+        Validación fallida (DTO backend = fuente de verdad, RNF-03). Incluye
+        `errores[]` con detalle por campo.
+      content:
+        application/problem+json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - type: object
+                required: [errores]
+                properties:
+                  errores:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ErrorCampo"
+    Conflicto:
+      description: Conflicto de estado (slot ocupado, solapamiento, acción no disponible).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NoAutorizado:
+      description: Sesión ausente, inválida o expirada.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Prohibido:
+      description: Acción fuera de gracia o sin permiso.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NoEncontrado:
+      description: Recurso inexistente o de otro tenant (404 sin revelar datos).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Expirado:
+      description: Token expirado o turno en estado terminal (410 Gone).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    DemasiadasPeticiones:
+      description: Rate limit superado (5 fallos de login → 15 min).
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    ErrorInterno:
+      description: Error inesperado; respuesta genérica sin internals.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Error"
+  schemas:
+    ErrorCampo:
+      type: object
+      required: [campo, mensaje]
+      properties:
+        campo:
+          type: string
+          description: Nombre del campo con error de validación.
+        mensaje:
+          type: string
+          description: Mensaje legible del error (español neutro).
+    Error:
+      type: object
+      required: [type, title, status, detail]
+      description: Error RFC 7807 (`application/problem+json`).
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI del tipo de problema.
+          example: https://sistema-reservas.example.com/problems/validacion
+        title:
+          type: string
+          description: Título legible del problema.
+        status:
+          type: integer
+          description: Código de estado HTTP.
+        detail:
+          type: string
+          description: Detalle legible del problema.
+        instance:
+          type: string
+          description: Path del recurso que originó el error.
+        errores:
+          type: array
+          description: Solo en respuestas 422.
+          items:
+            $ref: "#/components/schemas/ErrorCampo"
+        alternativas:
+          type: array
+          maxItems: 3
+          description: Solo en respuestas 409 — slot_keys alternativos.
+          items:
+            type: string
+    TurnoEstado:
+      type: string
+      description: Estado del turno (enum Postgres `turno_estado`).
+      enum: [pendiente, confirmado, completado, cancelado, no_show]
+    RecordatorioCanal:
+      type: string
+      description: Canal de recordatorio (enum Postgres `recordatorio_canal`).
+      enum: [email, log]
+    RecordatorioEstado:
+      type: string
+      description: Estado del recordatorio (enum Postgres `recordatorio_estado`).
+      enum: [programado, enviado, fallido, cancelado]
+    EventoTipo:
+      type: string
+      description: Tipo de evento de métricas (enum Postgres `evento_tipo`).
+      enum:
+        - reserva_creada
+        - reserva_confirmada
+        - cancelacion
+        - reagendulacion
+        - recordatorio_enviado
+        - recordatorio_fallido
+        - completado
+        - no_show
+    EventoOrigen:
+      type: string
+      description: Origen del evento (enum Postgres `evento_origen`).
+      enum: [public, business, system]
+    ServicioPublico:
+      type: object
+      required: [id, nombre, duracion_min, precio, zona_horaria]
+      description: Servicio visible en el flujo público (sin tenant_id ni parámetros internos).
+      properties:
+        id:
+          type: string
+          format: uuid
+        nombre:
+          type: string
+        duracion_min:
+          type: integer
+          minimum: 15
+          multipleOf: 15
+          description: Duración en minutos (múltiplo de 15, RB-AGD-01).
+        precio:
+          type: [number, "null"]
+          description: Precio informativo (opcional).
+        zona_horaria:
+          type: string
+          description: Zona horaria IANA del negocio.
+    Slot:
+      type: object
+      required: [slot_key, fecha_hora_inicio, fecha_hora_fin]
+      description: Slot ofrecido (proyección calculada, nunca persistida — RB-AGD-07).
+      properties:
+        slot_key:
+          type: string
+          description: "`<fecha_hora_inicio_utc_ISO8601>|<servicio_id>` (URL-encoded en query)."
+          example: "2026-10-05T09:00:00.000Z|3f2a9b1e-..."
+        fecha_hora_inicio:
+          type: string
+          format: date-time
+          description: Inicio del slot en UTC.
+        fecha_hora_fin:
+          type: string
+          format: date-time
+          description: Fin del slot en UTC.
+    DiaAgenda:
+      type: object
+      required: [fecha, slots]
+      properties:
+        fecha:
+          type: string
+          format: date
+          description: Fecha del día en la zona del negocio.
+        slots:
+          type: array
+          items:
+            $ref: "#/components/schemas/Slot"
+    AgendaResponse:
+      type: object
+      required: [zona_horaria, dias]
+      properties:
+        zona_horaria:
+          type: string
+          description: Zona horaria IANA del negocio.
+        dias:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiaAgenda"
+    ClienteInput:
+      type: object
+      required: [nombre]
+      description: >
+        Cliente de la reserva. Debe aportar al menos un canal de contacto
+        (email y/o teléfono); sin canal → 422 (CA-RST-03).
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
+        email:
+          type: [string, "null"]
+          format: email
+        telefono:
+          type: [string, "null"]
+          maxLength: 40
+      anyOf:
+        - required: [email]
+        - required: [telefono]
+    TurnoCrearInput:
+      type: object
+      required: [servicio_id, slot_key, cliente, consentimiento]
+      properties:
+        servicio_id:
+          type: string
+          format: uuid
+        slot_key:
+          type: string
+          description: "Slot solicitado (`<inicio_utc ISO8601>|<servicio_id>`)."
+        cliente:
+          $ref: "#/components/schemas/ClienteInput"
+        consentimiento:
+          type: boolean
+          const: true
+          description: >
+            Consentimiento explícito para guardar los datos y comunicaciones
+            del turno (PRV-01). Debe ser `true`; si es `false` → 422.
+    TurnoCreado:
+      type: object
+      required: [turno_id, estado, enlace_gestion, cliente_id]
+      properties:
+        turno_id:
+          type: string
+          format: uuid
+        estado:
+          $ref: "#/components/schemas/TurnoEstado"
+        enlace_gestion:
+          type: string
+          format: uri
+          description: URL de gestión del turno (`/g/{token}`).
+        cliente_id:
+          type: string
+          format: uuid
+    TurnoGestion:
+      type: object
+      required: [estado, servicio, fecha_hora_inicio, fecha_hora_fin, cliente_nombre]
+      description: Datos mínimos para la página de gestión del enlace (sin PII del cliente).
+      properties:
+        estado:
+          $ref: "#/components/schemas/TurnoEstado"
+        servicio:
+          type: string
+          description: Nombre del servicio.
+        fecha_hora_inicio:
+          type: string
+          format: date-time
+        fecha_hora_fin:
+          type: string
+          format: date-time
+        cliente_nombre:
+          type: string
+    TurnoAccionResultado:
+      type: object
+      required: [turno_id, estado]
+      properties:
+        turno_id:
+          type: string
+          format: uuid
+        estado:
+          $ref: "#/components/schemas/TurnoEstado"
+        fecha_hora_inicio:
+          type: string
+          format: date-time
+          description: Solo en reagendar — nuevo horario.
+        fecha_hora_fin:
+          type: string
+          format: date-time
+          description: Solo en reagendar — nuevo horario.
+    CredencialesLogin:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 8
+    OperadorSesion:
+      type: object
+      required: [operador_id, email, nombre]
+      properties:
+        operador_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        nombre:
+          type: string
+    HorarioInput:
+      type: object
+      required: [dia_semana, hora_inicio, hora_fin, timezone]
+      description: Horario recurrente (hora local de pared; la conversión UTC maneja DST — AD-06).
+      properties:
+        dia_semana:
+          type: integer
+          minimum: 1
+          maximum: 7
+          description: Día de la semana (1 = lunes … 7 = domingo).
+        hora_inicio:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d(:[0-5]\\d)?$"
+          description: "Hora de inicio en formato HH:MM[:SS] (hora local de pared)."
+        hora_fin:
+          type: string
+          pattern: "^([01]\\d|2[0-3]):[0-5]\\d(:[0-5]\\d)?$"
+          description: "Hora de fin en formato HH:MM[:SS]; debe ser posterior a inicio."
+        timezone:
+          type: string
+          description: Zona horaria IANA (p. ej. America/Argentina/Buenos_Aires).
+    Horario:
+      allOf:
+        - $ref: "#/components/schemas/HorarioInput"
+        - type: object
+          required: [id, created_at]
+          properties:
+            id:
+              type: string
+              format: uuid
+            created_at:
+              type: string
+              format: date-time
+    BloqueInput:
+      type: object
+      required: [fecha_inicio, fecha_fin]
+      properties:
+        fecha_inicio:
+          type: string
+          format: date-time
+        fecha_fin:
+          type: string
+          format: date-time
+          description: Debe ser >= fecha_inicio.
+        motivo:
+          type: [string, "null"]
+          description: Motivo opcional de la indisponibilidad.
+    Bloque:
+      allOf:
+        - $ref: "#/components/schemas/BloqueInput"
+        - type: object
+          required: [id, created_at]
+          properties:
+            id:
+              type: string
+              format: uuid
+            created_at:
+              type: string
+              format: date-time
+    ServicioInput:
+      type: object
+      required: [nombre, duracion_min]
+      properties:
+        nombre:
+          type: string
+          minLength: 1
+          maxLength: 120
+        duracion_min:
+          type: integer
+          minimum: 15
+          multipleOf: 15
+        precio:
+          type: [number, "null"]
+          description: Precio informativo (opcional).
+        booking_window_days:
+          type: integer
+          minimum: 1
+          maximum: 90
+          default: 30
+          description: Ventana de reserva en días (RB-AGD-02).
+        cancellation_grace_minutes:
+          type: integer
+          minimum: 30
+          maximum: 1440
+          default: 180
+          description: Gracia de cancelación en minutos (RB-CRG-01).
+        activo:
+          type: boolean
+          default: true
+    Servicio:
+      allOf:
+        - $ref: "#/components/schemas/ServicioInput"
+        - type: object
+          required: [id, created_at, updated_at]
+          properties:
+            id:
+              type: string
+              format: uuid
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+    ServicioParametrosInput:
+      type: object
+      description: Parámetros de reserva editables sin reemplazar el servicio completo.
+      properties:
+        booking_window_days:
+          type: integer
+          minimum: 1
+          maximum: 90
+        cancellation_grace_minutes:
+          type: integer
+          minimum: 30
+          maximum: 1440
+        activo:
+          type: boolean
+    TurnoResumen:
+      type: object
+      required: [id, estado, cliente_nombre, servicio_nombre, fecha_hora_inicio, fecha_hora_fin]
+      description: "Turno para vistas de lista del negocio (RB-VNG-01: hora local del negocio)."
+      properties:
+        id:
+          type: string
+          format: uuid
+        estado:
+          $ref: "#/components/schemas/TurnoEstado"
+        cliente_nombre:
+          type: string
+        servicio_nombre:
+          type: string
+        fecha_hora_inicio:
+          type: string
+          format: date-time
+        fecha_hora_fin:
+          type: string
+          format: date-time
+    TurnoDetalle:
+      type: object
+      required:
+        - id
+        - estado
+        - fecha_hora_inicio
+        - fecha_hora_fin
+        - cliente
+        - servicio
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        estado:
+          $ref: "#/components/schemas/TurnoEstado"
+        motivo:
+          type: [string, "null"]
+          description: Motivo de cancelación/reagendamiento (negocio).
+        fecha_hora_inicio:
+          type: string
+          format: date-time
+        fecha_hora_fin:
+          type: string
+          format: date-time
+        cliente:
+          type: object
+          required: [nombre]
+          properties:
+            nombre:
+              type: string
+            email:
+              type: [string, "null"]
+              format: email
+            telefono:
+              type: [string, "null"]
+        servicio:
+          type: object
+          required: [id, nombre, duracion_min]
+          properties:
+            id:
+              type: string
+              format: uuid
+            nombre:
+              type: string
+            duracion_min:
+              type: integer
+            precio:
+              type: [number, "null"]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    AccionTurnoInput:
+      type: object
+      required: [accion]
+      properties:
+        accion:
+          type: string
+          enum: [confirmar, cancelar, completado, no_show]
+        motivo:
+          type: [string, "null"]
+          description: Obligatorio para cancelar (CA-CRG-04); opcional para el resto.
+    MetricasResumen:
+      type: object
+      required: [reservas_por_semana, tasa_no_show, ocupacion_semana, cancelaciones]
+      properties:
+        reservas_por_semana:
+          type: array
+          description: KPI 1 — reservas por semana ISO (8 semanas, zona del negocio).
+          items:
+            type: object
+            required: [semana, cantidad]
+            properties:
+              semana:
+                type: string
+                description: Semana ISO (formato IYYY-IW).
+              cantidad:
+                type: integer
+        tasa_no_show:
+          type: [number, "null"]
+          description: KPI 2 — no_show ÷ (completado + no_show); nulo si denominador 0.
+        ocupacion_semana:
+          type: [number, "null"]
+          description: KPI 3 — turnos activos ÷ slots ofrecidos (semana actual); nulo sin horarios.
+        cancelaciones:
+          type: object
+          required: [cantidad, tasa]
+          description: KPI 4 — cancelaciones en 4 semanas.
+          properties:
+            cantidad:
+              type: integer
+            tasa:
+              type: number
+              description: Cancelados ÷ creados del período.
+    Health:
+      type: object
+      required: [status, db]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        db:
+          type: string
+          enum: [up, down]
