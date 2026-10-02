@@ -94,10 +94,13 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("aislamiento multi-tenant", () =
     expect(tenantB).not.toBeNull();
 
     // Datos en A: 2 clientes. Datos en B: 1 cliente.
+    // B1 repite el email de A1 a propósito: el índice único es POR TENANT
+    // (tenant_id, lower(email)) — F-01 — así que el insert debe tener éxito
+    // (un índice global bloquearía a B, acoplando tenants).
     await db.insert(clientes).values([
       { tenant_id: tenantA!.id, nombre: "Cliente A1", email: "a1@correo.test", consentimiento: true },
       { tenant_id: tenantA!.id, nombre: "Cliente A2", email: "a2@correo.test", consentimiento: true },
-      { tenant_id: tenantB!.id, nombre: "Cliente B1", email: "b1@correo.test", consentimiento: true },
+      { tenant_id: tenantB!.id, nombre: "Cliente B1", email: "a1@correo.test", consentimiento: true },
     ]);
 
     // B consulta su historial → solo sus datos (3 → 1).

@@ -1,5 +1,5 @@
 {
-  "id": "7c6d5840-bb0e-4196-82d6-158c232e91e0",
+  "id": "db862dc5-645b-45a5-b6c6-6f3cabbca52d",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -141,6 +141,12 @@
         "clientes_tenant_email_uq": {
           "name": "clientes_tenant_email_uq",
           "columns": [
+            {
+              "expression": "tenant_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
             {
               "expression": "lower(\"email\")",
               "asc": true,

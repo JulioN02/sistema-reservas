@@ -140,7 +140,7 @@ ALTER TABLE "sesiones" ADD CONSTRAINT "sesiones_tenant_id_tenants_id_fk" FOREIGN
 ALTER TABLE "turnos" ADD CONSTRAINT "turnos_tenant_id_tenants_id_fk" FOREIGN KEY ("tenant_id") REFERENCES "public"."tenants"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "turnos" ADD CONSTRAINT "turnos_cliente_id_clientes_id_fk" FOREIGN KEY ("cliente_id") REFERENCES "public"."clientes"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "turnos" ADD CONSTRAINT "turnos_servicio_id_servicios_id_fk" FOREIGN KEY ("servicio_id") REFERENCES "public"."servicios"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
-CREATE UNIQUE INDEX "clientes_tenant_email_uq" ON "clientes" USING btree (lower("email")) WHERE "clientes"."email" IS NOT NULL;--> statement-breakpoint
+CREATE UNIQUE INDEX "clientes_tenant_email_uq" ON "clientes" USING btree ("tenant_id",lower("email")) WHERE "clientes"."email" IS NOT NULL;--> statement-breakpoint
 CREATE INDEX "eventos_tenant_timestamp_idx" ON "eventos_metricas" USING btree ("tenant_id","timestamp_utc");--> statement-breakpoint
 CREATE INDEX "eventos_tenant_tipo_timestamp_idx" ON "eventos_metricas" USING btree ("tenant_id","tipo","timestamp_utc");--> statement-breakpoint
 CREATE UNIQUE INDEX "operadores_tenant_email_uq" ON "operadores" USING btree ("tenant_id","email");--> statement-breakpoint

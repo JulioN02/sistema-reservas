@@ -148,9 +148,10 @@ export const clientes = pgTable(
       .defaultNow(),
   },
   (t) => [
-    // Índice único parcial: un email por tenant; permite múltiples NULL.
+    // Índice único parcial: un email por tenant (diseño §3.1); permite
+    // múltiples NULL y emails repetidos entre tenants distintos (F-01).
     uniqueIndex("clientes_tenant_email_uq")
-      .on(sql`lower(${t.email})`)
+      .on(t.tenant_id, sql`lower(${t.email})`)
       .where(sql`${t.email} IS NOT NULL`),
     // Red final: al menos un canal de contacto (CA-RST-03).
     check("clientes_canal_check", sql`${t.email} IS NOT NULL OR ${t.telefono} IS NOT NULL`),
