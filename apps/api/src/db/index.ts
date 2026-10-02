@@ -1,9 +1,13 @@
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { Pool } from "pg";
+import * as schema from "./schema";
 
 /**
- * Conexión PostgreSQL (pg). T-05 agrega Drizzle sobre este pool; acá se
- * mantiene el mínimo necesario para el chequeo de salud (SELECT 1).
+ * Conexión PostgreSQL + cliente Drizzle. El pool se crea perezosamente en
+ * cada `createDb` (v1: una instancia por proceso).
  */
+
+export type Database = NodePgDatabase<typeof schema>;
 
 export function createPool(databaseUrl: string): Pool {
   return new Pool({
@@ -11,6 +15,10 @@ export function createPool(databaseUrl: string): Pool {
     max: 10,
     connectionTimeoutMillis: 2000,
   });
+}
+
+export function createDb(databaseUrl: string): Database {
+  return drizzle(createPool(databaseUrl), { schema });
 }
 
 export type CheckDb = () => Promise<boolean>;

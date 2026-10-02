@@ -18,6 +18,9 @@
   },
   "dependencies": {
     "@sistema-reservas/contracts": "workspace:*",
+    "argon2": "^0.44.0",
+    "drizzle-kit": "^0.31.11",
+    "drizzle-orm": "^0.44.7",
     "fastify": "^5.12.5",
     "pg": "^8.23.1",
     "pino": "^9.14.0",
