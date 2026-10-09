@@ -32,6 +32,14 @@ export const tenantRepository = {
     });
   },
 
+  /** Busca un tenant por id (zona horaria para agenda); `undefined` si no. */
+  porId(db: Database, tenantId: string) {
+    return db.query.tenants.findFirst({
+      where: eq(tenants.id, tenantId),
+      columns: { id: true, timezone: true },
+    });
+  },
+
   /** Verifica que el tenant exista (scoped por definición: el propio tenant). */
   async existe(db: Database, tenantId: string): Promise<boolean> {
     const encontrado = await db.query.tenants.findFirst({

@@ -8,6 +8,7 @@ import { createErrorHandler, NotFoundError } from "./infra/errors";
 import { buildLoggerOptions, nuevoRequestId } from "./infra/logger";
 import { authRoutes } from "./routes/auth";
 import { healthRoutes } from "./routes/health";
+import { agendaRoutes } from "./routes/agenda";
 
 export interface AppDeps {
   env: Env;
@@ -55,6 +56,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
     checkDb: deps.checkDb ?? createCheckDb(deps.env.DATABASE_URL),
   });
   app.register(authRoutes, { db, env: deps.env });
+  app.register(agendaRoutes, { db, env: deps.env });
 
   return app;
 }
