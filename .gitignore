@@ -30,3 +30,4 @@ pnpm-debug.log*
 
 # Docker
 postgres-data/
+docker-compose.override.yml

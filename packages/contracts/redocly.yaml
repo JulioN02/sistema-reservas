@@ -1,0 +1,13 @@
+# Redocly lint configuration — gate CI de la fase CONTRATO (0 errores).
+# Base `minimal` + reglas estructurales explícitas. Se prefiere `minimal`
+# sobre `recommended` para un gate determinista entre versiones de redocly;
+# las reglas de estilo (summaries, operationIds) se vigilan por convención
+# de revisión y por el test de conformancia (T-21).
+extends:
+  - minimal
+rules:
+  spec: error
+  no-unresolved-refs: error
+  no-ambiguous-paths: warn
+  operation-summary: warn
+  operation-operationId: warn

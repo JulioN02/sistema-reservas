@@ -1,0 +1,28 @@
+{
+  "name": "sistema-reservas",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Sistema de Reservas — monorepo (API Fastify + Web React 19 + Contracts OpenAPI)",
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "lint": "eslint .",
+    "test": "vitest run --no-file-parallelism",
+    "dev": "pnpm --parallel --filter @sistema-reservas/api --filter @sistema-reservas/web dev",
+    "db:up": "docker compose up -d db db-test",
+    "db:down": "docker compose down"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "eslint": "^9.30.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.3.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.35.0",
+    "vitest": "^3.2.4"
+  }
+}

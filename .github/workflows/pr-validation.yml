@@ -29,6 +29,7 @@ jobs:
     name: Check Issue Has status:approved
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Verify linked issue has status:approved
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -50,6 +51,7 @@ jobs:
     name: Check PR Has type:* Label
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - name: Verify exactly one type:* label
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -73,3 +75,42 @@ jobs:
           else
             echo "No shell scripts found — shellcheck skipped"
           fi
+
+  quality-gate:
+    name: Quality Gate (lint · test · build · contracts)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sistema_reservas_test
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d sistema_reservas_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm lint
+      - name: Test (Postgres-backed, not skipped)
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/sistema_reservas_test
+        run: pnpm test
+      - name: Build
+        run: pnpm build
+      - name: Contract lint (redocly)
+        run: pnpm --filter @sistema-reservas/contracts lint:contract
