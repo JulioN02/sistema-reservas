@@ -17,6 +17,8 @@
     "db:seed": "tsx src/db/seed.ts"
   },
   "dependencies": {
+    "@fastify/cookie": "^11.1.3",
+    "@fastify/rate-limit": "^11.2.1",
     "@sistema-reservas/contracts": "workspace:*",
     "argon2": "^0.44.0",
     "drizzle-kit": "^0.31.11",
