@@ -57,6 +57,31 @@ paths:
           $ref: "#/components/responses/NoAutorizado"
         "500":
           $ref: "#/components/responses/ErrorInterno"
+    post:
+      operationId: crearServicio
+      summary: Crea un servicio (negocio)
+      security:
+        - cookieAuth: []
+      tags: [negocio]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServicioInput"
+      responses:
+        "201":
+          description: Servicio creado.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Servicio"
+        "401":
+          $ref: "#/components/responses/NoAutorizado"
+        "422":
+          $ref: "#/components/responses/Validacion"
+        "500":
+          $ref: "#/components/responses/ErrorInterno"
   /agenda:
     get:
       operationId: calcularAgenda

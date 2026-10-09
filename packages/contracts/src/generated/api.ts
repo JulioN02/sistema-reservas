@@ -17,7 +17,8 @@ export interface paths {
          */
         get: operations["listarServicios"];
         put?: never;
-        post?: never;
+        /** Crea un servicio (negocio) */
+        post: operations["crearServicio"];
         delete?: never;
         options?: never;
         head?: never;
@@ -824,6 +825,33 @@ export interface operations {
                 };
             };
             401: components["responses"]["NoAutorizado"];
+            500: components["responses"]["ErrorInterno"];
+        };
+    };
+    crearServicio: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ServicioInput"];
+            };
+        };
+        responses: {
+            /** @description Servicio creado. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Servicio"];
+                };
+            };
+            401: components["responses"]["NoAutorizado"];
+            422: components["responses"]["Validacion"];
             500: components["responses"]["ErrorInterno"];
         };
     };
