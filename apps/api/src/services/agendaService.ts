@@ -1,11 +1,22 @@
 import { addDays, addMinutes, format, getDay, parseISO } from "date-fns";
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
 import type { Database } from "../db";
-import type { DiaAgenda, ServicioPublico } from "../dto/agenda";
+import type { Servicio as FilaServicio } from "../db/schema";
+import type {
+  Bloque,
+  BloqueInput,
+  DiaAgenda,
+  Horario,
+  HorarioInput,
+  Servicio,
+  ServicioInput,
+  ServicioParametros,
+  ServicioPublico,
+} from "../dto/agenda";
 import { agendaRepository } from "../repositories/agendaRepository";
-import { NotFoundError } from "../infra/errors";
+import { ConflictError, NotFoundError } from "../infra/errors";
 import { assertTenantId } from "../infra/tenant";
-import { tenantRepository } from "../repositories/tenantScoped";
+import { conLockDeTenant, tenantRepository } from "../repositories/tenantScoped";
 
 /**
  * AgendaService (T-08) — capability agenda-disponibilidad.
@@ -187,6 +198,40 @@ export interface AgendaPublicaOpciones {
   ahora?: Date;
 }
 
+/** `number | null | undefined` del DTO → string de la columna numeric(10,2). */
+function precioAString(precio: number | null | undefined): string | null {
+  if (precio === null || precio === undefined) return null;
+  return String(precio);
+}
+
+/** Fila de `servicios` → Servicio del contrato (sin tenant_id, CA-INT-04). */
+function mapaServicioNegocio(
+  s: Pick<
+    FilaServicio,
+    | "id"
+    | "nombre"
+    | "duracion_min"
+    | "precio"
+    | "booking_window_days"
+    | "cancellation_grace_minutes"
+    | "activo"
+    | "created_at"
+    | "updated_at"
+  >,
+): Servicio {
+  return {
+    id: s.id,
+    nombre: s.nombre,
+    duracion_min: s.duracion_min,
+    precio: s.precio === null ? null : Number(s.precio),
+    booking_window_days: s.booking_window_days,
+    cancellation_grace_minutes: s.cancellation_grace_minutes,
+    activo: s.activo,
+    created_at: s.created_at.toISOString(),
+    updated_at: s.updated_at.toISOString(),
+  };
+}
+
 export const agendaService = {
   /**
    * Agenda pública de un servicio: valida existencia, consulta horarios /
@@ -305,5 +350,257 @@ export const agendaService = {
       precio: s.precio === null ? null : Number(s.precio),
       zona_horaria: tenant.timezone,
     }));
+  },
+
+  // --- Gestión de agenda del negocio (T-09) — sesión obligatoria ---
+
+  async listarHorarios(db: Database, tenantId: string): Promise<Horario[]> {
+    const horarios = await agendaRepository.horariosDelTenant(db, tenantId);
+    return horarios.map((h) => ({
+      id: h.id,
+      dia_semana: h.dia_semana,
+      hora_inicio: h.hora_inicio,
+      hora_fin: h.hora_fin,
+      timezone: h.timezone,
+      created_at: h.created_at.toISOString(),
+    }));
+  },
+
+  /**
+   * Crea un horario bajo el lock del tenant (RB-AGD-01): si otro horario del
+   * mismo día solapa el rango → 409.
+   */
+  async crearHorario(
+    db: Database,
+    tenantId: string,
+    input: HorarioInput,
+  ): Promise<Horario> {
+    assertTenantId(tenantId);
+    return conLockDeTenant(db, tenantId, async (tx) => {
+      const solapados = await agendaRepository.horariosQueSolapan(
+        tx,
+        tenantId,
+        input.dia_semana,
+        input.hora_inicio,
+        input.hora_fin,
+      );
+      if (solapados.length > 0) {
+        throw new ConflictError(
+          "Ya existe un horario que se solapa con el mismo día de la semana.",
+        );
+      }
+      const fila = await agendaRepository.insertarHorario(tx, {
+        tenant_id: tenantId,
+        ...input,
+      });
+      return {
+        id: fila.id,
+        dia_semana: fila.dia_semana,
+        hora_inicio: fila.hora_inicio,
+        hora_fin: fila.hora_fin,
+        timezone: fila.timezone,
+        created_at: fila.created_at.toISOString(),
+      };
+    });
+  },
+
+  /**
+   * Actualiza un horario bajo el lock del tenant; el 409 de solapamiento
+   * excluye al propio horario (PUT idempotente sobre sí mismo).
+   */
+  async actualizarHorario(
+    db: Database,
+    tenantId: string,
+    id: string,
+    input: HorarioInput,
+  ): Promise<Horario> {
+    assertTenantId(tenantId);
+    return conLockDeTenant(db, tenantId, async (tx) => {
+      const existente = await agendaRepository.horarioPorId(tx, tenantId, id);
+      if (existente === undefined) {
+        throw new NotFoundError("El horario no existe.");
+      }
+      const solapados = await agendaRepository.horariosQueSolapan(
+        tx,
+        tenantId,
+        input.dia_semana,
+        input.hora_inicio,
+        input.hora_fin,
+        id,
+      );
+      if (solapados.length > 0) {
+        throw new ConflictError(
+          "Ya existe un horario que se solapa con el mismo día de la semana.",
+        );
+      }
+      const fila = await agendaRepository.actualizarHorario(tx, tenantId, id, {
+        ...input,
+      });
+      if (fila === undefined) {
+        throw new NotFoundError("El horario no existe.");
+      }
+      return {
+        id: fila.id,
+        dia_semana: fila.dia_semana,
+        hora_inicio: fila.hora_inicio,
+        hora_fin: fila.hora_fin,
+        timezone: fila.timezone,
+        created_at: fila.created_at.toISOString(),
+      };
+    });
+  },
+
+  async eliminarHorario(
+    db: Database,
+    tenantId: string,
+    id: string,
+  ): Promise<void> {
+    const eliminado = await agendaRepository.eliminarHorario(db, tenantId, id);
+    if (!eliminado) {
+      throw new NotFoundError("El horario no existe.");
+    }
+  },
+
+  async listarBloques(db: Database, tenantId: string): Promise<Bloque[]> {
+    const bloques = await agendaRepository.listarBloques(db, tenantId);
+    return bloques.map((b) => ({
+      id: b.id,
+      fecha_inicio: b.fecha_inicio.toISOString(),
+      fecha_fin: b.fecha_fin.toISOString(),
+      motivo: b.motivo,
+      created_at: b.created_at.toISOString(),
+    }));
+  },
+
+  /**
+   * Crea un bloque bajo el lock del tenant (RB-AGD-03, AGD-S7): si solapa
+   * turnos pendiente/confirmado → 409 con detalle de los turnos afectados.
+   */
+  async crearBloque(
+    db: Database,
+    tenantId: string,
+    input: BloqueInput,
+  ): Promise<Bloque> {
+    assertTenantId(tenantId);
+    return conLockDeTenant(db, tenantId, async (tx) => {
+      const afectados = await agendaRepository.turnosActivosEnRango(
+        tx,
+        tenantId,
+        input.fecha_inicio,
+        input.fecha_fin,
+      );
+      if (afectados.length > 0) {
+        const detalle =
+          `El bloque solapa ${afectados.length} turno(s) activo(s): ` +
+          afectados.map((t) => t.id).join(", ");
+        throw new ConflictError(detalle);
+      }
+      const fila = await agendaRepository.insertarBloque(tx, {
+        tenant_id: tenantId,
+        fecha_inicio: input.fecha_inicio,
+        fecha_fin: input.fecha_fin,
+        motivo: input.motivo ?? null,
+      });
+      return {
+        id: fila.id,
+        fecha_inicio: fila.fecha_inicio.toISOString(),
+        fecha_fin: fila.fecha_fin.toISOString(),
+        motivo: fila.motivo,
+        created_at: fila.created_at.toISOString(),
+      };
+    });
+  },
+
+  async eliminarBloque(
+    db: Database,
+    tenantId: string,
+    id: string,
+  ): Promise<void> {
+    const eliminado = await agendaRepository.eliminarBloque(db, tenantId, id);
+    if (!eliminado) {
+      throw new NotFoundError("El bloque no existe.");
+    }
+  },
+
+  async listarServicios(db: Database, tenantId: string): Promise<Servicio[]> {
+    const servicios = await agendaRepository.listarServicios(db, tenantId);
+    return servicios.map(mapaServicioNegocio);
+  },
+
+  async crearServicio(
+    db: Database,
+    tenantId: string,
+    input: ServicioInput,
+  ): Promise<Servicio> {
+    const fila = await agendaRepository.insertarServicio(db, {
+      tenant_id: tenantId,
+      nombre: input.nombre,
+      duracion_min: input.duracion_min,
+      precio: precioAString(input.precio),
+      booking_window_days: input.booking_window_days ?? 30,
+      cancellation_grace_minutes: input.cancellation_grace_minutes ?? 180,
+      activo: input.activo ?? true,
+    });
+    return mapaServicioNegocio(fila);
+  },
+
+  async actualizarServicio(
+    db: Database,
+    tenantId: string,
+    id: string,
+    input: ServicioInput,
+  ): Promise<Servicio> {
+    const fila = await agendaRepository.actualizarServicio(db, tenantId, id, {
+      nombre: input.nombre,
+      duracion_min: input.duracion_min,
+      precio: precioAString(input.precio),
+      booking_window_days: input.booking_window_days ?? 30,
+      cancellation_grace_minutes: input.cancellation_grace_minutes ?? 180,
+      activo: input.activo ?? true,
+    });
+    if (fila === undefined) {
+      throw new NotFoundError("El servicio no existe.");
+    }
+    return mapaServicioNegocio(fila);
+  },
+
+  async actualizarParametrosServicio(
+    db: Database,
+    tenantId: string,
+    id: string,
+    input: ServicioParametros,
+  ): Promise<Servicio> {
+    const fila = await agendaRepository.actualizarParametrosServicio(
+      db,
+      tenantId,
+      id,
+      input,
+    );
+    if (fila === undefined) {
+      throw new NotFoundError("El servicio no existe.");
+    }
+    return mapaServicioNegocio(fila);
+  },
+
+  /** Elimina un servicio; 409 si tiene turnos asociados (integridad). */
+  async eliminarServicio(
+    db: Database,
+    tenantId: string,
+    id: string,
+  ): Promise<void> {
+    const existe = await agendaRepository.servicioCompletoPorId(
+      db,
+      tenantId,
+      id,
+    );
+    if (existe === undefined) {
+      throw new NotFoundError("El servicio no existe.");
+    }
+    if (await agendaRepository.tieneTurnos(db, tenantId, id)) {
+      throw new ConflictError(
+        "El servicio tiene turnos asociados y no puede eliminarse.",
+      );
+    }
+    await agendaRepository.eliminarServicio(db, tenantId, id);
   },
 };
