@@ -1,4 +1,4 @@
-import { and, eq, type SQL } from "drizzle-orm";
+import { and, eq, sql, type SQL } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import type { Database } from "../db";
 import { tenants } from "../db/schema";
@@ -32,6 +32,14 @@ export const tenantRepository = {
     });
   },
 
+  /** Busca un tenant por id (zona horaria para agenda); `undefined` si no. */
+  porId(db: Database, tenantId: string) {
+    return db.query.tenants.findFirst({
+      where: eq(tenants.id, tenantId),
+      columns: { id: true, timezone: true },
+    });
+  },
+
   /** Verifica que el tenant exista (scoped por definición: el propio tenant). */
   async existe(db: Database, tenantId: string): Promise<boolean> {
     const encontrado = await db.query.tenants.findFirst({
@@ -41,3 +49,23 @@ export const tenantRepository = {
     return encontrado !== undefined;
   },
 };
+
+/**
+ * Mutex por tenant (diseño §5): serializa TODA mutación de agenda del tenant
+ * (`SELECT … FOR UPDATE` sobre `tenants`) dentro de la misma transacción —
+ * el mismo mecanismo del claim atómico de turnos (RST-01) aplicado a
+ * horarios (RB-AGD-01) y bloques (RB-AGD-03).
+ */
+export async function conLockDeTenant<T>(
+  db: Database,
+  tenantId: string,
+  operacion: (tx: Database) => Promise<T>,
+): Promise<T> {
+  return db.transaction(async (tx) => {
+    await tx.execute(
+      sql`SELECT id FROM tenants WHERE id = ${tenantId} FOR UPDATE`,
+    );
+    // La transacción expone la misma interfaz de query que la Database.
+    return operacion(tx as unknown as Database);
+  });
+}
