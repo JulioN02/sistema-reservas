@@ -9,6 +9,7 @@ import { buildLoggerOptions, nuevoRequestId } from "./infra/logger";
 import { authRoutes } from "./routes/auth";
 import { healthRoutes } from "./routes/health";
 import { agendaRoutes } from "./routes/agenda";
+import { turnosRoutes } from "./routes/turnos";
 
 export interface AppDeps {
   env: Env;
@@ -57,6 +58,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   app.register(authRoutes, { db, env: deps.env });
   app.register(agendaRoutes, { db, env: deps.env });
+  app.register(turnosRoutes, { db, env: deps.env });
 
   return app;
 }

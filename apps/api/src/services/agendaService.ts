@@ -84,7 +84,11 @@ function seSolapan(aIni: Date, aFin: Date, bIni: Date, bFin: Date): boolean {
 }
 
 /** Suma días de CALENDARIO en la zona (robusto ante DST: no suma 24 h UTC). */
-function sumarDiasEnZona(instante: Date, dias: number, timezone: string): Date {
+export function sumarDiasEnZona(
+  instante: Date,
+  dias: number,
+  timezone: string,
+): Date {
   const local = formatInTimeZone(instante, timezone, "yyyy-MM-dd");
   const siguiente = addDays(parseISO(local), dias);
   return fromZonedTime(`${format(siguiente, "yyyy-MM-dd")}T00:00:00`, timezone);
