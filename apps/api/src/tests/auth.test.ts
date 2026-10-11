@@ -176,6 +176,36 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("auth — login/logout/me (T-07)
     await app.close();
   });
 
+  it("VNG-S2: un login exitoso NO consume ni reinicia el contador de intentos fallidos — 3 fallos + 1 ok + 2 fallos → el siguiente intento es 429", async () => {
+    const db = await prepararBd();
+    const app = await crearApp(db);
+
+    // 3 fallos → contador = 3 (mismo cliente: IP+email, clave por defecto).
+    for (let i = 0; i < 3; i += 1) {
+      const fallido = await login(app, OPERADOR_EMAIL, "password-incorrecta");
+      expect(fallido.statusCode).toBe(401);
+    }
+
+    // 1 login exitoso: el contador NO se consume ni se reinicia (queda en 3).
+    // Si el éxito reiniciara el contador, el último intento devolvería 200.
+    const ok = await login(app);
+    expect(ok.statusCode).toBe(200);
+
+    // 2 fallos más → contador = 5 (umbral alcanzado).
+    for (let i = 0; i < 2; i += 1) {
+      const fallido = await login(app, OPERADOR_EMAIL, "password-incorrecta");
+      expect(fallido.statusCode).toBe(401);
+    }
+
+    // El siguiente intento —incluso con credenciales correctas— es 429 (lockout).
+    const bloqueado = await login(app);
+    expect(bloqueado.statusCode).toBe(429);
+    expect(bloqueado.headers["content-type"]).toContain("application/problem+json");
+    expect(bloqueado.json().type).toBe(`${PROBLEM_BASE_URI}/demasiadas-peticiones`);
+
+    await app.close();
+  });
+
   it("RB-VNG-05 (logout): 204 revoca la sesión y la invalida para /me", async () => {
     const db = await prepararBd();
     const app = await crearApp(db);

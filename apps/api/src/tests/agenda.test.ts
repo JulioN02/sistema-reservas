@@ -7,6 +7,7 @@ import { buildApp } from "../app";
 import { parseEnv } from "../config/env";
 import { createDb, type Database } from "../db";
 import { seedDatabase } from "../db/seed";
+import { servicios } from "../db/schema";
 import { calcularSlots } from "../services/agendaService";
 
 /**
@@ -515,6 +516,33 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
         url: `/api/v1/agenda?servicio_id=${randomUUID()}&desde=2026-10-12&hasta=2026-10-13`,
       });
       expect(desconocido.statusCode).toBe(404);
+
+      await app.close();
+    });
+
+    it("404: un servicio INACTIVO no se ofrece en la agenda pública (defensa en profundidad)", async () => {
+      const db = await prepararBd();
+      const app = await crearApp(db);
+
+      // El GET /servicios público ya solo lista activos; insertamos uno
+      // inactivo directo en BD (mismo tenant demo) para probar el path por id.
+      const existente = await db.query.servicios.findFirst();
+      if (existente === undefined) throw new Error("sin servicios");
+      const inactivo = await db
+        .insert(servicios)
+        .values({
+          tenant_id: existente.tenant_id,
+          nombre: "Servicio inactivo (no público)",
+          duracion_min: 30,
+          activo: false,
+        })
+        .returning();
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/v1/agenda?servicio_id=${inactivo[0]!.id}&desde=2026-10-12&hasta=2026-10-13`,
+      });
+      expect(res.statusCode).toBe(404);
 
       await app.close();
     });

@@ -67,11 +67,20 @@ export const agendaRepository = {
     });
   },
 
-  /** Servicio por id DENTRO del tenant (404 si es de otro — INT-S1). */
-  servicioPorId(db: Database, tenantId: string, servicioId: string) {
+  /**
+   * Servicio ACTIVO por id DENTRO del tenant (public path: 404 si es de otro
+   * tenant O está inactivo — defensa en profundidad, CA-DEF-01 análogo).
+   * La gestión de negocio usa `servicioCompletoPorId` (lee también inactivos).
+   */
+  servicioActivoPorId(db: Database, tenantId: string, servicioId: string) {
     return db.query.servicios.findFirst({
       where: (t) =>
-        filtroTenant(tenantId, t.tenant_id, eq(t.id, servicioId)),
+        filtroTenant(
+          tenantId,
+          t.tenant_id,
+          eq(t.id, servicioId),
+          eq(t.activo, true),
+        ),
       columns: {
         id: true,
         duracion_min: true,

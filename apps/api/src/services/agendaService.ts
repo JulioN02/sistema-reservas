@@ -234,9 +234,9 @@ function mapaServicioNegocio(
 
 export const agendaService = {
   /**
-   * Agenda pública de un servicio: valida existencia, consulta horarios /
-   * bloques / turnos activos y proyecta un día por fecha del rango
-   * (recortado a la ventana de reserva del servicio).
+   * Agenda pública de un servicio: valida existencia + servicio ACTIVO,
+   * consulta horarios / bloques / turnos activos y proyecta un día por fecha
+   * del rango (recortado a la ventana de reserva del servicio).
    */
   async agendaPublica(
     db: Database,
@@ -246,7 +246,7 @@ export const agendaService = {
     const ahora = opciones.ahora ?? new Date();
     const hoy = inicioDelDiaEnZona(ahora, opciones.timezone);
 
-    const servicio = await agendaRepository.servicioPorId(
+    const servicio = await agendaRepository.servicioActivoPorId(
       db,
       opciones.tenant_id,
       opciones.servicio_id,
