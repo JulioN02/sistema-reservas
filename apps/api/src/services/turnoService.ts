@@ -8,10 +8,21 @@ import {
 } from "@sistema-reservas/contracts";
 import type { Database } from "../db";
 import type { Turno } from "../db/schema";
-import type { TurnoCrearInput, TurnoCreado } from "../dto/turnos";
-import { ConflictError, NotFoundError, ValidationError } from "../infra/errors";
+import type {
+  TurnoAccionResultado,
+  TurnoCrearInput,
+  TurnoCreado,
+  TurnoGestion,
+} from "../dto/turnos";
+import {
+  ConflictError,
+  GoneError,
+  NotFoundError,
+  ValidationError,
+} from "../infra/errors";
 import { agendaRepository } from "../repositories/agendaRepository";
 import { conLockDeTenant, tenantRepository } from "../repositories/tenantScoped";
+import type { TurnoGestionFila } from "../repositories/turnoRepository";
 import { turnoRepository } from "../repositories/turnoRepository";
 import { generarTokenOpaco, hashToken } from "./authService";
 import { clienteService } from "./clienteService";
@@ -50,6 +61,32 @@ export type OrigenReserva =
 
 /** Slot de la oferta (misma proyección que agenda — RB-AGD-07). */
 export type SlotOferta = Slot;
+
+/** Vigencia del enlace de gestión (RB-CMR-01): 7 días post-cita. */
+export const DIAS_VIGENCIA_ENLACE = 7;
+
+/** Estados terminales del turno (spec §11, EC-12): sin transiciones. */
+const ESTADOS_TERMINALES: readonly TurnoEstado[] = [
+  TurnoEstado.Cancelado,
+  TurnoEstado.Completado,
+  TurnoEstado.NoShow,
+];
+
+/** ¿El estado es terminal (cancelado/completado/no_show)? */
+export function esEstadoTerminal(estado: TurnoEstado): boolean {
+  return ESTADOS_TERMINALES.includes(estado);
+}
+
+/**
+ * ¿El enlace ya expiró? (RB-CMR-01): la vigencia termina 7 días después de
+ * la fecha del turno. Borde: exactamente en `inicio + 7d` ya expiró.
+ */
+export function enlaceExpirado(fechaHoraInicio: Date, ahora: Date): boolean {
+  const vence = new Date(
+    fechaHoraInicio.getTime() + DIAS_VIGENCIA_ENLACE * 86_400_000,
+  );
+  return vence.getTime() <= ahora.getTime();
+}
 
 const CANALES_CONTACTO = {
   Email: "email",
@@ -355,6 +392,114 @@ export const turnoService = {
         enlace_gestion: `/g/${token}`,
         cliente_id: cliente.id,
       };
+    });
+  },
+
+  /**
+   * Resuelve el turno por token con los datos de gestión (también usado por
+   * GET /turnos/{token} y POST /turnos/{token}/confirmar — T-11). Nunca
+   * revela la existencia del turno (CMR-S3, RB-INT-02):
+   * - token desconocido → 404 genérico (igual para token malformado);
+   * - estado terminal o expirado (7 días post-cita, RB-CMR-01) → 410.
+   */
+  async resolverTurnoPorToken(
+    db: Database,
+    token: string,
+    ahora?: Date,
+  ): Promise<TurnoGestionFila> {
+    const fila = await turnoRepository.turnoGestionPorTokenHash(
+      db,
+      hashToken(token),
+    );
+    if (fila === undefined) {
+      throw new NotFoundError("El enlace de gestión no es válido.");
+    }
+    const instante = ahora ?? new Date();
+    if (
+      esEstadoTerminal(fila.estado) ||
+      enlaceExpirado(fila.fecha_hora_inicio, instante)
+    ) {
+      throw new GoneError("El enlace expiró o el turno alcanzó un estado final.");
+    }
+    return fila;
+  },
+
+  /**
+   * GET /turnos/{token} → TurnoGestion {estado, servicio,
+   * fecha_hora_inicio/fin, cliente_nombre} (diseño §4.2, aditivo). Sin
+   * tenant_id (CA-INT-04); 404/410 sin revelar datos (CMR-S3).
+   */
+  async obtenerPorToken(
+    db: Database,
+    token: string,
+    ahora?: Date,
+  ): Promise<TurnoGestion> {
+    const fila = await turnoService.resolverTurnoPorToken(db, token, ahora);
+    return {
+      estado: fila.estado,
+      servicio: fila.servicio,
+      fecha_hora_inicio: fila.fecha_hora_inicio.toISOString(),
+      fecha_hora_fin: fila.fecha_hora_fin.toISOString(),
+      cliente_nombre: fila.cliente_nombre,
+    };
+  },
+
+  /**
+   * POST /turnos/{token}/confirmar (T-11, RB-CMR-02): UPDATE condicional
+   * idempotente `pendiente → confirmado` + evento `reserva_confirmada
+   * {medio: enlace}` en la MISMA transacción (CA-CMR-01, CA-MTE-01).
+   *
+   * - ya confirmado → 200 SIN evento duplicado (CMR-S2);
+   * - terminal o expirado → 410 (CMR-S3); token desconocido → 404;
+   * - concurrencia: el lock de fila del UPDATE serializa; solo la tx que
+   *   transiciona escribe el evento (exactamente-1).
+   */
+  async confirmar(
+    db: Database,
+    token: string,
+    ahora?: Date,
+  ): Promise<TurnoAccionResultado> {
+    const fila = await turnoService.resolverTurnoPorToken(db, token, ahora);
+
+    // Idempotente: ya confirmado → 200 sin evento nuevo (CA-CMR-01).
+    if (fila.estado === TurnoEstado.Confirmado) {
+      return { turno_id: fila.id, estado: fila.estado };
+    }
+
+    return db.transaction(async (tx) => {
+      const txn = tx as unknown as Database;
+      const actualizado = await turnoRepository.confirmarSiPendiente(
+        txn,
+        fila.tenant_id,
+        fila.id,
+      );
+      if (actualizado !== undefined) {
+        // Evento en la misma tx del cambio de estado (exactamente-1).
+        await turnoRepository.insertarEvento(txn, {
+          tenant_id: fila.tenant_id,
+          turno_id: fila.id,
+          cliente_id: fila.cliente_id,
+          servicio_id: fila.servicio_id,
+          tipo: EventoTipo.ReservaConfirmada,
+          payload: { medio: "enlace" },
+          origen: EventoOrigen.Public,
+        });
+        return { turno_id: fila.id, estado: TurnoEstado.Confirmado };
+      }
+
+      // 0 filas: otra transición ganó la carrera. Si quedó confirmado →
+      // 200 sin evento; cualquier otro estado (terminal) → 410.
+      const estadoActual = await turnoRepository.turnoEstadoPorId(
+        txn,
+        fila.tenant_id,
+        fila.id,
+      );
+      if (estadoActual?.estado === TurnoEstado.Confirmado) {
+        return { turno_id: fila.id, estado: TurnoEstado.Confirmado };
+      }
+      throw new GoneError(
+        "El enlace expiró o el turno alcanzó un estado final.",
+      );
     });
   },
 };

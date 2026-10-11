@@ -48,5 +48,26 @@ export function createTurnosController(deps: TurnosControllerDeps) {
       });
       return reply.status(201).send(creado);
     },
+
+    /**
+     * GET /api/v1/turnos/{token} (T-11) → 200 TurnoGestion. El token deriva
+     * turno → tenant implícito (RB-INT-02); 404/410 sin revelar datos
+     * (CMR-S3); nunca expone tenant_id (CA-INT-04).
+     */
+    async obtenerPorToken(request: FastifyRequest, reply: FastifyReply) {
+      const { token } = request.params as { token: string };
+      const gestion = await turnoService.obtenerPorToken(deps.db, token);
+      return reply.status(200).send(gestion);
+    },
+
+    /**
+     * POST /api/v1/turnos/{token}/confirmar (T-11) → 200 idempotente
+     * {turno_id, estado} (RB-CMR-02, CA-CMR-01); terminal/expirado → 410.
+     */
+    async confirmarTurno(request: FastifyRequest, reply: FastifyReply) {
+      const { token } = request.params as { token: string };
+      const resultado = await turnoService.confirmar(deps.db, token);
+      return reply.status(200).send(resultado);
+    },
   };
 }

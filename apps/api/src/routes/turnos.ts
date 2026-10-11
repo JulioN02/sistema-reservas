@@ -47,4 +47,8 @@ export const turnosRoutes: FastifyPluginAsync<TurnosRouteOptions> = async (
     { preHandler: sesionOpcional(opts.db) },
     controller.crearTurno,
   );
+  // Enlace de gestión (T-11, contrato §4.2 — token opaco ≥128 bits, RB-CMR-01):
+  // GET consulta TurnoGestion; POST confirmar es idempotente (RB-CMR-02).
+  app.get("/api/v1/turnos/:token", controller.obtenerPorToken);
+  app.post("/api/v1/turnos/:token/confirmar", controller.confirmarTurno);
 };

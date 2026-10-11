@@ -94,6 +94,12 @@ export type TurnoCrearInput = z.infer<typeof turnoCrearSchema>;
 /** TurnoCreado — mismo shape que el contrato OpenAPI (201). */
 export type TurnoCreado = components["schemas"]["TurnoCreado"];
 
+/** TurnoGestion — GET /turnos/{token} (contrato §4.2, aditivo, T-11). */
+export type TurnoGestion = components["schemas"]["TurnoGestion"];
+
+/** TurnoAccionResultado — POST /turnos/{token}/confirmar (200, T-11). */
+export type TurnoAccionResultado = components["schemas"]["TurnoAccionResultado"];
+
 /** Convierte issues de zod al shape `errores[]` del contrato (422). */
 function erroresDeIssues(issues: z.ZodIssue[]): ErrorCampo[] {
   return issues.map((issue) => ({

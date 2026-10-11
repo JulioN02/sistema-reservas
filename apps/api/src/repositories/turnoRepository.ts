@@ -1,4 +1,4 @@
-import { eq, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { TurnoEstado } from "@sistema-reservas/contracts";
 import type { EventoOrigen, EventoTipo, RecordatorioCanal } from "@sistema-reservas/contracts";
 import type { Database } from "../db";
@@ -6,6 +6,7 @@ import {
   clientes,
   eventosMetricas,
   recordatorios,
+  servicios,
   turnos,
 } from "../db/schema";
 import { filtroTenant } from "./tenantScoped";
@@ -17,6 +18,18 @@ import { filtroTenant } from "./tenantScoped";
  * (diseño §5); los insert de turno/evento/recordatorio se ejecutan SIEMPRE
  * dentro de la misma transacción (`conLockDeTenant`) — CA-MTE-01.
  */
+
+export interface TurnoGestionFila {
+  id: string;
+  tenant_id: string;
+  estado: TurnoEstado;
+  fecha_hora_inicio: Date;
+  fecha_hora_fin: Date;
+  cliente_id: string;
+  servicio_id: string;
+  servicio: string;
+  cliente_nombre: string;
+}
 
 export const turnoRepository = {
   /**
@@ -167,5 +180,79 @@ export const turnoRepository = {
       .where(filtroTenant(tenantId, clientes.tenant_id, eq(clientes.id, id)))
       .returning();
     return filas[0]!;
+  },
+
+  /**
+   * Turno + servicio + cliente por `token_hash` (T-11). El token es la
+   * derivación implícita turno → tenant (RB-INT-02): `token_hash` es único
+   * global, así que esta lectura NO necesita tenant_id; toda mutación
+   * posterior sí lo exige (RB-INT-01). Devuelve `undefined` si el token no
+   * corresponde a ningún turno (CMR-S3: respuesta genérica, sin revelar).
+   */
+  async turnoGestionPorTokenHash(
+    db: Database,
+    tokenHash: string,
+  ): Promise<TurnoGestionFila | undefined> {
+    const filas = await db
+      .select({
+        id: turnos.id,
+        tenant_id: turnos.tenant_id,
+        estado: turnos.estado,
+        fecha_hora_inicio: turnos.fecha_hora_inicio,
+        fecha_hora_fin: turnos.fecha_hora_fin,
+        cliente_id: turnos.cliente_id,
+        servicio_id: turnos.servicio_id,
+        servicio: servicios.nombre,
+        cliente_nombre: clientes.nombre,
+      })
+      .from(turnos)
+      .innerJoin(clientes, eq(clientes.id, turnos.cliente_id))
+      .innerJoin(servicios, eq(servicios.id, turnos.servicio_id))
+      .where(eq(turnos.token_hash, tokenHash))
+      .limit(1);
+    return filas[0];
+  },
+
+  /**
+   * UPDATE condicional idempotente (RB-CMR-02, T-11): `pendiente` →
+   * `confirmado`. Devuelve la fila actualizada o `undefined` si el turno ya
+   * no estaba pendiente (ya confirmado/terminal) — en ese caso NO se emite
+   * evento (CA-CMR-01: exactamente 1 evento por transición). Scoped por
+   * tenant_id (el mutex de agenda no aplica: el lock de fila del UPDATE
+   * serializa confirmaciones concurrentes del mismo turno).
+   */
+  async confirmarSiPendiente(
+    db: Database,
+    tenantId: string,
+    turnoId: string,
+  ): Promise<{ id: string; estado: TurnoEstado } | undefined> {
+    const filas = await db
+      .update(turnos)
+      .set({ estado: TurnoEstado.Confirmado, updated_at: new Date() })
+      .where(
+        and(
+          eq(turnos.id, turnoId),
+          eq(turnos.tenant_id, tenantId),
+          eq(turnos.estado, TurnoEstado.Pendiente),
+        ),
+      )
+      .returning({ id: turnos.id, estado: turnos.estado });
+    return filas[0];
+  },
+
+  /** Estado actual del turno (re-lectura post-UPDATE para idempotencia). */
+  async turnoEstadoPorId(
+    db: Database,
+    tenantId: string,
+    turnoId: string,
+  ): Promise<{ id: string; estado: TurnoEstado } | undefined> {
+    const filas = await db
+      .select({ id: turnos.id, estado: turnos.estado })
+      .from(turnos)
+      .where(
+        and(eq(turnos.id, turnoId), eq(turnos.tenant_id, tenantId)),
+      )
+      .limit(1);
+    return filas[0];
   },
 };
