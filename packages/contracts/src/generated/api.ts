@@ -891,6 +891,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["SolicitudInvalida"];
+            404: components["responses"]["NoEncontrado"];
             422: components["responses"]["Validacion"];
             500: components["responses"]["ErrorInterno"];
         };
