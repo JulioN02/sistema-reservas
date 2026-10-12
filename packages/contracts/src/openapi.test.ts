@@ -126,6 +126,25 @@ describe("openapi.yaml — conformancia con el diseño §4.2", () => {
     );
   });
 
+  it("TurnoGestion expone servicio_id y zona_horaria como obligatorios (resolución por id)", () => {
+    const gestion = spec.components.schemas.TurnoGestion;
+    expect(gestion.required).toContain("servicio_id");
+    expect(gestion.required).toContain("zona_horaria");
+    expect(gestion.properties.servicio_id.format).toBe("uuid");
+    expect(gestion.properties.zona_horaria.type).toBe("string");
+    // Aditivo: los campos previos se conservan (no breaking).
+    for (const campo of [
+      "estado",
+      "servicio",
+      "fecha_hora_inicio",
+      "fecha_hora_fin",
+      "cliente_nombre",
+    ]) {
+      expect(gestion.required).toContain(campo);
+      expect(gestion.properties[campo]).toBeDefined();
+    }
+  });
+
   it("consentimiento es obligatorio y debe ser true (PRV-01)", () => {
     const turnoCrear = spec.components.schemas.TurnoCrearInput;
     expect(turnoCrear.required).toContain("consentimiento");
