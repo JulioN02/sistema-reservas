@@ -532,8 +532,8 @@ export interface components {
             turno_id: string;
             estado: components["schemas"]["TurnoEstado"];
             /**
-             * Format: uri
-             * @description URL de gestión del turno (`/g/{token}`).
+             * Format: uri-reference
+             * @description URL de gestión del turno (`/g/{token}`, relativa al origen de la app).
              */
             enlace_gestion: string;
             /** Format: uuid */
