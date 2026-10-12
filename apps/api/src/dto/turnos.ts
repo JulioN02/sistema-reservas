@@ -97,8 +97,71 @@ export type TurnoCreado = components["schemas"]["TurnoCreado"];
 /** TurnoGestion — GET /turnos/{token} (contrato §4.2, aditivo, T-11). */
 export type TurnoGestion = components["schemas"]["TurnoGestion"];
 
-/** TurnoAccionResultado — POST /turnos/{token}/confirmar (200, T-11). */
+/** TurnoAccionResultado — POST /turnos/{token}/confirmar|cancelar|reagendar
+ * y POST /turnos/{id}/acciones (200, T-11/T-14). */
 export type TurnoAccionResultado = components["schemas"]["TurnoAccionResultado"];
+
+/**
+ * Acciones de negocio (POST /turnos/{id}/acciones, T-14) — const types
+ * (nunca union literals directas). Espejo del enum `accion` del contrato.
+ */
+export const ACCION_TURNO = {
+  Confirmar: "confirmar",
+  Cancelar: "cancelar",
+  Completado: "completado",
+  NoShow: "no_show",
+} as const;
+export type AccionTurno = (typeof ACCION_TURNO)[keyof typeof ACCION_TURNO];
+
+/** Cuerpo de POST /turnos/{token}/reagendar: solo el nuevo `slot_key`. */
+export const turnoReagendarSchema = z.object({
+  slot_key: z.string().transform((valor, ctx) => {
+    const descompuesto = descomponerSlotKey(valor);
+    if (descompuesto === null) {
+      ctx.addIssue({
+        code: "custom",
+        message: "slot_key con formato `<inicio_utc ISO8601>|<servicio_id>`.",
+      });
+      return z.NEVER;
+    }
+    return descompuesto;
+  }),
+});
+
+export type TurnoReagendarInput = z.infer<typeof turnoReagendarSchema>["slot_key"];
+
+/**
+ * Cuerpo de POST /turnos/{id}/acciones (AccionTurnoInput): `motivo` es
+ * obligatorio para cancelar (CA-CRG-04, RB-VNG-04); opcional para el resto.
+ */
+export const accionTurnoSchema = z
+  .object({
+    accion: z.enum([
+      ACCION_TURNO.Confirmar,
+      ACCION_TURNO.Cancelar,
+      ACCION_TURNO.Completado,
+      ACCION_TURNO.NoShow,
+    ]),
+    motivo: z
+      .string()
+      .trim()
+      .max(500, "motivo demasiado largo.")
+      .nullish(),
+  })
+  .superRefine((valor, ctx) => {
+    if (
+      valor.accion === ACCION_TURNO.Cancelar &&
+      (valor.motivo === null || valor.motivo === undefined || valor.motivo === "")
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["motivo"],
+        message: "motivo es obligatorio para cancelar (CA-CRG-04).",
+      });
+    }
+  });
+
+export type AccionTurnoInput = z.infer<typeof accionTurnoSchema>;
 
 /** Convierte issues de zod al shape `errores[]` del contrato (422). */
 function erroresDeIssues(issues: z.ZodIssue[]): ErrorCampo[] {
@@ -115,4 +178,28 @@ export function parsearTurnoCrear(cuerpo: unknown): TurnoCrearInput {
     throw new ValidationError(erroresDeIssues(resultado.error.issues));
   }
   return resultado.data;
+}
+
+/** Valida el cuerpo de reagendar (422 problem+json con `errores[]`). */
+export function parsearTurnoReagendar(cuerpo: unknown): TurnoReagendarInput {
+  const resultado = turnoReagendarSchema.safeParse(cuerpo);
+  if (!resultado.success) {
+    throw new ValidationError(erroresDeIssues(resultado.error.issues));
+  }
+  return resultado.data.slot_key;
+}
+
+/** Valida el cuerpo de las acciones de negocio (422 con `errores[]`). */
+export function parsearAccionTurno(cuerpo: unknown): {
+  accion: AccionTurno;
+  motivo: string | null;
+} {
+  const resultado = accionTurnoSchema.safeParse(cuerpo);
+  if (!resultado.success) {
+    throw new ValidationError(erroresDeIssues(resultado.error.issues));
+  }
+  return {
+    accion: resultado.data.accion,
+    motivo: resultado.data.motivo ?? null,
+  };
 }

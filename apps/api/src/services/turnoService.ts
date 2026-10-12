@@ -9,20 +9,26 @@ import {
 import type { Database } from "../db";
 import type { Turno } from "../db/schema";
 import type {
+  AccionTurno,
   TurnoAccionResultado,
   TurnoCrearInput,
   TurnoCreado,
   TurnoGestion,
+  TurnoReagendarInput,
 } from "../dto/turnos";
+import { ACCION_TURNO } from "../dto/turnos";
 import {
   ConflictError,
+  ForbiddenError,
   GoneError,
   NotFoundError,
   ValidationError,
 } from "../infra/errors";
+import { construirEnlace } from "../notificaciones/channel";
+import type { NotificationService } from "../notificaciones/notificationService";
 import { agendaRepository } from "../repositories/agendaRepository";
 import { conLockDeTenant, tenantRepository } from "../repositories/tenantScoped";
-import type { TurnoGestionFila } from "../repositories/turnoRepository";
+import type { TurnoConContexto } from "../repositories/turnoRepository";
 import { turnoRepository } from "../repositories/turnoRepository";
 import { generarTokenOpaco, hashToken } from "./authService";
 import { clienteService } from "./clienteService";
@@ -176,6 +182,114 @@ function esViolacionClaveUnica(error: unknown): boolean {
   );
 }
 
+/** Minutos mínimos post-inicio para marcar no-show (RB-VNG-02). */
+export const NO_SHOW_MINUTOS = 30;
+
+/**
+ * ¿La cancelación/reagenda del cliente cae dentro de la gracia del servicio?
+ * (RB-CRG-01) — gracia = `cancellation_grace_minutes`; dentro si faltan al
+ * menos esos minutos para el inicio (borde inclusivo). Comparación de instantes
+ * UTC (el margen en minutos es independiente de la zona).
+ */
+export function dentroDeGracia(
+  fechaHoraInicio: Date,
+  ahora: Date,
+  graciaMin: number,
+): boolean {
+  return fechaHoraInicio.getTime() - ahora.getTime() >= graciaMin * 60_000;
+}
+
+/** Minutos transcurridos desde el inicio del turno (puede ser negativo). */
+export function minutosDesdeInicio(
+  fechaHoraInicio: Date,
+  ahora: Date,
+): number {
+  return Math.floor((ahora.getTime() - fechaHoraInicio.getTime()) / 60_000);
+}
+
+/** Canal de contacto del negocio para el 403 fuera de gracia (RB-CRG-02). */
+function canalContactoNegocio(fila: TurnoConContexto): string {
+  const partes: string[] = [];
+  if (fila.tenant_email_contacto !== null) {
+    partes.push(fila.tenant_email_contacto);
+  }
+  if (fila.tenant_telefono_contacto !== null) {
+    partes.push(fila.tenant_telefono_contacto);
+  }
+  return partes.length > 0 ? partes.join(" / ") : "el negocio";
+}
+
+/** Mensaje claro + canal de contacto del negocio (RB-CRG-02, CA-CRG-02). */
+function mensajeFueraDeGracia(
+  fila: TurnoConContexto,
+  graciaMin: number,
+): string {
+  return (
+    `La cancelación está fuera de la ventana de gracia (${graciaMin} min). ` +
+    `Contacte al negocio: ${canalContactoNegocio(fila)}.`
+  );
+}
+
+/**
+ * Dependencias opcionales de notificación (RB-CRG-07): el NotificationService
+ * abstrae el canal (email en prod, log en dev). Si no se inyecta o el cliente
+ * no tiene email, el envío es no-op (el evento de métricas sigue siendo la
+ * fuente de verdad del cambio).
+ */
+export interface NotificacionOpciones {
+  notificaciones?: NotificationService;
+  ahora?: Date;
+}
+
+/**
+ * Notifica un cambio de turno por email si el cliente tiene email (RB-CRG-07).
+ * Se invoca SIEMPRE post-commit (nunca dentro de la tx) para no notificar
+ * cambios revertidos.
+ */
+async function notificarCambio(
+  notificaciones: NotificationService | undefined,
+  datos: {
+    destinatario: string | null;
+    cliente_nombre: string;
+    servicio: string;
+    fecha_hora_inicio: Date;
+    timezone: string;
+    enlace: string;
+  },
+): Promise<void> {
+  if (notificaciones === undefined || datos.destinatario === null) return;
+  await notificaciones.enviar({
+    canal: RecordatorioCanal.Email,
+    destinatario: datos.destinatario,
+    cliente_nombre: datos.cliente_nombre,
+    servicio: datos.servicio,
+    fecha_hora_inicio: datos.fecha_hora_inicio,
+    timezone: datos.timezone,
+    enlace: datos.enlace,
+    lead_min: 0,
+    intento: 1,
+  });
+}
+
+/**
+ * Resuelve el turno por token SIN aplicar la regla de expiración/terminal de
+ * `resolverTurnoPorToken`: la cancelación idempotente (RB-CRG-08) necesita ver
+ * un turno ya cancelado para responder 200. Token desconocido → 404 genérico.
+ */
+async function resolverPorTokenSinTerminal(
+  db: Database,
+  token: string,
+): Promise<TurnoConContexto> {
+  const fila = await turnoRepository.turnoGestionPorTokenHash(
+    db,
+    hashToken(token),
+  );
+  if (fila === undefined) {
+    throw new NotFoundError("El enlace de gestión no es válido.");
+  }
+  return fila;
+}
+
 /**
  * Recalcula la oferta del día (mismo `calcularSlots` de agenda) y devuelve
  * los 3 primeros slots posteriores al solicitado (diseño §5 — Alternativas).
@@ -209,6 +323,188 @@ async function calcularAlternativas(
     ahora,
   });
   return elegirAlternativas(slots, solicitado);
+}
+
+/**
+ * Acciones de negocio (T-14) — sin límite de gracia (RB-CRG-03). Confirmar es
+ * idempotente (mismo camino de T-11, `medio: negocio`); cancelar exige motivo
+ * (validado en el DTO); completado desde el inicio (RB-VNG-03) y no_show desde
+ * inicio + 30 min (RB-VNG-02). Estados terminales → 409 (EC-12).
+ */
+async function confirmarPorNegocio(
+  db: Database,
+  fila: TurnoConContexto,
+): Promise<TurnoAccionResultado> {
+  if (fila.estado === TurnoEstado.Confirmado) {
+    return { turno_id: fila.id, estado: fila.estado };
+  }
+  if (esEstadoTerminal(fila.estado)) {
+    throw new ConflictError("El turno alcanzó un estado final.");
+  }
+  return db.transaction(async (tx) => {
+    const txn = tx as unknown as Database;
+    const actualizado = await turnoRepository.confirmarSiPendiente(
+      txn,
+      fila.tenant_id,
+      fila.id,
+    );
+    if (actualizado !== undefined) {
+      await turnoRepository.insertarEvento(txn, {
+        tenant_id: fila.tenant_id,
+        turno_id: fila.id,
+        cliente_id: fila.cliente_id,
+        servicio_id: fila.servicio_id,
+        tipo: EventoTipo.ReservaConfirmada,
+        payload: { medio: "negocio" },
+        origen: EventoOrigen.Business,
+      });
+      return { turno_id: fila.id, estado: TurnoEstado.Confirmado };
+    }
+    const estadoActual = await turnoRepository.turnoEstadoPorId(
+      txn,
+      fila.tenant_id,
+      fila.id,
+    );
+    if (estadoActual?.estado === TurnoEstado.Confirmado) {
+      return { turno_id: fila.id, estado: TurnoEstado.Confirmado };
+    }
+    throw new ConflictError("El turno alcanzó un estado final.");
+  });
+}
+
+async function cancelarPorNegocio(
+  db: Database,
+  fila: TurnoConContexto,
+  motivo: string | null,
+  opciones: NotificacionOpciones,
+  ahora: Date,
+): Promise<TurnoAccionResultado> {
+  // Idempotente (RB-CRG-08): ya cancelado → 200 sin evento.
+  if (fila.estado === TurnoEstado.Cancelado) {
+    return { turno_id: fila.id, estado: fila.estado };
+  }
+  if (esEstadoTerminal(fila.estado)) {
+    throw new ConflictError("El turno alcanzó un estado final.");
+  }
+  const graciaMin = fila.servicio_grace_min;
+  const dentro = dentroDeGracia(fila.fecha_hora_inicio, ahora, graciaMin);
+  const resultado = await db.transaction(async (tx) => {
+    const txn = tx as unknown as Database;
+    const actualizado = await turnoRepository.transicionarSiActivo(
+      txn,
+      fila.tenant_id,
+      fila.id,
+      TurnoEstado.Cancelado,
+      motivo,
+    );
+    if (actualizado !== undefined) {
+      await turnoRepository.insertarEvento(txn, {
+        tenant_id: fila.tenant_id,
+        turno_id: fila.id,
+        cliente_id: fila.cliente_id,
+        servicio_id: fila.servicio_id,
+        tipo: EventoTipo.Cancelacion,
+        payload: {
+          por: "negocio",
+          dentro_gracia: dentro,
+          gracia_min: graciaMin,
+          motivo,
+        },
+        origen: EventoOrigen.Business,
+      });
+    }
+    return { turno_id: fila.id, estado: TurnoEstado.Cancelado };
+  });
+  await notificarCambio(opciones.notificaciones, {
+    destinatario: fila.cliente_email,
+    cliente_nombre: fila.cliente_nombre,
+    servicio: fila.servicio_nombre,
+    fecha_hora_inicio: fila.fecha_hora_inicio,
+    timezone: fila.tenant_timezone,
+    // Limitación conocida (idéntica al scheduler T-12): la BD solo guarda el
+    // sha256 del token; desde el path por id no hay enlace crudo que exponer.
+    enlace: construirEnlace(fila.token_hash),
+  });
+  return resultado;
+}
+
+async function completarPorNegocio(
+  db: Database,
+  fila: TurnoConContexto,
+  ahora: Date,
+): Promise<TurnoAccionResultado> {
+  if (esEstadoTerminal(fila.estado)) {
+    throw new ConflictError("El turno alcanzó un estado final.");
+  }
+  // RB-VNG-03: completado disponible solo desde el inicio del turno.
+  if (ahora.getTime() < fila.fecha_hora_inicio.getTime()) {
+    throw new ConflictError("El turno aún no ha comenzado (RB-VNG-03).");
+  }
+  const minutos = minutosDesdeInicio(fila.fecha_hora_inicio, ahora);
+  return db.transaction(async (tx) => {
+    const txn = tx as unknown as Database;
+    const actualizado = await turnoRepository.transicionarSiActivo(
+      txn,
+      fila.tenant_id,
+      fila.id,
+      TurnoEstado.Completado,
+    );
+    if (actualizado === undefined) {
+      throw new ConflictError("El turno alcanzó un estado final.");
+    }
+    await turnoRepository.insertarEvento(txn, {
+      tenant_id: fila.tenant_id,
+      turno_id: fila.id,
+      cliente_id: fila.cliente_id,
+      servicio_id: fila.servicio_id,
+      tipo: EventoTipo.Completado,
+      payload: { minutos_desde_inicio: minutos },
+      origen: EventoOrigen.Business,
+    });
+    return { turno_id: fila.id, estado: TurnoEstado.Completado };
+  });
+}
+
+async function noShowPorNegocio(
+  db: Database,
+  fila: TurnoConContexto,
+  ahora: Date,
+): Promise<TurnoAccionResultado> {
+  if (esEstadoTerminal(fila.estado)) {
+    throw new ConflictError("El turno alcanzó un estado final.");
+  }
+  // RB-VNG-02: no_show disponible solo desde inicio + 30 min.
+  const umbral = new Date(
+    fila.fecha_hora_inicio.getTime() + NO_SHOW_MINUTOS * 60_000,
+  );
+  if (ahora.getTime() < umbral.getTime()) {
+    throw new ConflictError(
+      "El no-show solo está disponible desde inicio + 30 min (RB-VNG-02).",
+    );
+  }
+  const minutos = minutosDesdeInicio(fila.fecha_hora_inicio, ahora);
+  return db.transaction(async (tx) => {
+    const txn = tx as unknown as Database;
+    const actualizado = await turnoRepository.transicionarSiActivo(
+      txn,
+      fila.tenant_id,
+      fila.id,
+      TurnoEstado.NoShow,
+    );
+    if (actualizado === undefined) {
+      throw new ConflictError("El turno alcanzó un estado final.");
+    }
+    await turnoRepository.insertarEvento(txn, {
+      tenant_id: fila.tenant_id,
+      turno_id: fila.id,
+      cliente_id: fila.cliente_id,
+      servicio_id: fila.servicio_id,
+      tipo: EventoTipo.NoShow,
+      payload: { minutos_post_inicio: minutos },
+      origen: EventoOrigen.Business,
+    });
+    return { turno_id: fila.id, estado: TurnoEstado.NoShow };
+  });
 }
 
 export const turnoService = {
@@ -406,7 +702,7 @@ export const turnoService = {
     db: Database,
     token: string,
     ahora?: Date,
-  ): Promise<TurnoGestionFila> {
+  ): Promise<TurnoConContexto> {
     const fila = await turnoRepository.turnoGestionPorTokenHash(
       db,
       hashToken(token),
@@ -437,7 +733,7 @@ export const turnoService = {
     const fila = await turnoService.resolverTurnoPorToken(db, token, ahora);
     return {
       estado: fila.estado,
-      servicio: fila.servicio,
+      servicio: fila.servicio_nombre,
       fecha_hora_inicio: fila.fecha_hora_inicio.toISOString(),
       fecha_hora_fin: fila.fecha_hora_fin.toISOString(),
       cliente_nombre: fila.cliente_nombre,
@@ -501,5 +797,294 @@ export const turnoService = {
         "El enlace expiró o el turno alcanzó un estado final.",
       );
     });
+  },
+
+  /**
+   * POST /turnos/{token}/cancelar (T-14, RB-CRG-01/02/08, CA-CRG-01/02/05):
+   * - cliente dentro de gracia → cancelado + evento `cancelacion {por:cliente,
+   *   dentro_gracia, gracia_min, motivo}` en la MISMA tx; el slot queda
+   *   re-ofertable al instante (proyección: el turno deja de estar activo);
+   * - ya cancelado → 200 idempotente SIN evento (RB-CRG-08);
+   * - fuera de gracia → 403 con canal de contacto, turno intacto (CA-CRG-02);
+   * - terminal (completado/no_show) → 409; expirado → 410; token → 404.
+   */
+  async cancelar(
+    db: Database,
+    token: string,
+    opciones: NotificacionOpciones = {},
+  ): Promise<TurnoAccionResultado> {
+    const ahora = opciones.ahora ?? new Date();
+    const fila = await resolverPorTokenSinTerminal(db, token);
+
+    // RB-CRG-08: cancelar un turno ya cancelado es idempotente (sin evento).
+    if (fila.estado === TurnoEstado.Cancelado) {
+      return { turno_id: fila.id, estado: fila.estado };
+    }
+    if (esEstadoTerminal(fila.estado)) {
+      throw new ConflictError("El turno alcanzó un estado final.");
+    }
+    if (enlaceExpirado(fila.fecha_hora_inicio, ahora)) {
+      throw new GoneError(
+        "El enlace expiró o el turno alcanzó un estado final.",
+      );
+    }
+
+    const graciaMin = fila.servicio_grace_min;
+    const dentro = dentroDeGracia(fila.fecha_hora_inicio, ahora, graciaMin);
+    if (!dentro) {
+      // RB-CRG-02: el turno permanece intacto (no se escribe ni evento).
+      throw new ForbiddenError(mensajeFueraDeGracia(fila, graciaMin));
+    }
+
+    const resultado = await db.transaction(async (tx) => {
+      const txn = tx as unknown as Database;
+      const actualizado = await turnoRepository.transicionarSiActivo(
+        txn,
+        fila.tenant_id,
+        fila.id,
+        TurnoEstado.Cancelado,
+        null,
+      );
+      if (actualizado !== undefined) {
+        await turnoRepository.insertarEvento(txn, {
+          tenant_id: fila.tenant_id,
+          turno_id: fila.id,
+          cliente_id: fila.cliente_id,
+          servicio_id: fila.servicio_id,
+          tipo: EventoTipo.Cancelacion,
+          payload: {
+            por: "cliente",
+            dentro_gracia: dentro,
+            gracia_min: graciaMin,
+            motivo: null,
+          },
+          origen: EventoOrigen.Public,
+        });
+      }
+      return { turno_id: fila.id, estado: TurnoEstado.Cancelado };
+    });
+
+    // RB-CRG-07: notificación (email si el cliente tiene email), post-commit.
+    await notificarCambio(opciones.notificaciones, {
+      destinatario: fila.cliente_email,
+      cliente_nombre: fila.cliente_nombre,
+      servicio: fila.servicio_nombre,
+      fecha_hora_inicio: fila.fecha_hora_inicio,
+      timezone: fila.tenant_timezone,
+      enlace: construirEnlace(token),
+    });
+
+    return resultado;
+  },
+
+  /**
+   * POST /turnos/{token}/reagendar (T-14, RB-CRG-04/05, CA-CRG-03): mueve el
+   * MISMO turno a un nuevo slot en una transacción atómica (libera el anterior
+   * + reclama el nuevo). Conserva id/cliente/servicio/estado; mismas
+   * validaciones de slot que la reserva (RST-05). Ocupado/no-ofertado → 409
+   * con alternativas y el turno conserva su horario original (CRG-S5).
+   */
+  async reagendar(
+    db: Database,
+    token: string,
+    input: TurnoReagendarInput,
+    opciones: NotificacionOpciones = {},
+  ): Promise<TurnoAccionResultado> {
+    const ahora = opciones.ahora ?? new Date();
+    const fila = await resolverPorTokenSinTerminal(db, token);
+
+    if (esEstadoTerminal(fila.estado)) {
+      throw new ConflictError("El turno alcanzó un estado final.");
+    }
+    if (enlaceExpirado(fila.fecha_hora_inicio, ahora)) {
+      throw new GoneError(
+        "El enlace expiró o el turno alcanzó un estado final.",
+      );
+    }
+
+    const graciaMin = fila.servicio_grace_min;
+    const dentro = dentroDeGracia(fila.fecha_hora_inicio, ahora, graciaMin);
+    if (!dentro) {
+      throw new ForbiddenError(mensajeFueraDeGracia(fila, graciaMin));
+    }
+
+    // RB-CRG-04: reagendar conserva el servicio del turno.
+    if (input.servicio_id !== fila.servicio_id) {
+      throw new ValidationError([
+        {
+          campo: "slot_key",
+          mensaje: "slot_key no corresponde al servicio del turno.",
+        },
+      ]);
+    }
+
+    const inicio = input.inicio_utc;
+    const fin = new Date(inicio.getTime() + fila.servicio_duracion_min * 60_000);
+    const servicio = {
+      id: fila.servicio_id,
+      duracion_min: fila.servicio_duracion_min,
+      booking_window_days: fila.servicio_booking_window_days,
+    };
+
+    // RB-RST-05: el nuevo slot debe pertenecer a la oferta calculada.
+    if (inicio.getTime() < ahora.getTime()) {
+      throw new ValidationError([
+        { campo: "slot_key", mensaje: "No se puede reagendar al pasado." },
+      ]);
+    }
+    const hoy = inicioDelDiaEnZona(ahora, fila.tenant_timezone);
+    const finVentana = sumarDiasEnZona(
+      hoy,
+      fila.servicio_booking_window_days,
+      fila.tenant_timezone,
+    );
+    if (
+      inicio.getTime() < hoy.getTime() ||
+      inicio.getTime() >= finVentana.getTime()
+    ) {
+      throw new ValidationError([
+        {
+          campo: "slot_key",
+          mensaje: "El slot está fuera de la ventana de reserva del servicio.",
+        },
+      ]);
+    }
+
+    const [horarios, bloques] = await Promise.all([
+      agendaRepository.horariosDelTenant(db, fila.tenant_id),
+      agendaRepository.bloquesEnRango(db, fila.tenant_id, inicio, fin),
+    ]);
+    if (!slotEnHorario(inicio, fin, horarios) || bloques.length > 0) {
+      throw new ConflictError(
+        "El slot solicitado ya no está disponible.",
+        await calcularAlternativas(
+          db,
+          fila.tenant_id,
+          servicio,
+          fila.tenant_timezone,
+          inicio,
+          ahora,
+        ),
+      );
+    }
+
+    // Claim atómico (diseño §5): mutex del tenant → re-chequeo de solapamiento
+    // EXCLUYENDO el propio turno → UPDATE atómico (libera + reclama) + evento.
+    const resultado = await conLockDeTenant(db, fila.tenant_id, async (tx) => {
+      const solapa = await turnoRepository.hayTurnoActivoQueSolapa(
+        tx,
+        fila.tenant_id,
+        inicio,
+        fin,
+        fila.id,
+      );
+      if (solapa) {
+        throw new ConflictError(
+          "El slot solicitado ya no está disponible.",
+          await calcularAlternativas(
+            tx,
+            fila.tenant_id,
+            servicio,
+            fila.tenant_timezone,
+            inicio,
+            ahora,
+          ),
+        );
+      }
+      let actualizado: { id: string; estado: TurnoEstado } | undefined;
+      try {
+        actualizado = await turnoRepository.reagendarTurno(
+          tx,
+          fila.tenant_id,
+          fila.id,
+          inicio,
+          fin,
+        );
+      } catch (error) {
+        if (esViolacionClaveUnica(error)) {
+          throw new ConflictError(
+            "El slot solicitado ya no está disponible.",
+            await calcularAlternativas(
+              tx,
+              fila.tenant_id,
+              servicio,
+              fila.tenant_timezone,
+              inicio,
+              ahora,
+            ),
+          );
+        }
+        throw error;
+      }
+      if (actualizado === undefined) {
+        throw new ConflictError("El turno alcanzó un estado final.");
+      }
+      await turnoRepository.insertarEvento(tx, {
+        tenant_id: fila.tenant_id,
+        turno_id: fila.id,
+        cliente_id: fila.cliente_id,
+        servicio_id: fila.servicio_id,
+        tipo: EventoTipo.Reagendulacion,
+        payload: {
+          slot_anterior_utc: fila.fecha_hora_inicio.toISOString(),
+          slot_nuevo_utc: inicio.toISOString(),
+          por: "cliente",
+          dentro_gracia: dentro,
+        },
+        origen: EventoOrigen.Public,
+      });
+      return {
+        turno_id: fila.id,
+        estado: actualizado.estado,
+        fecha_hora_inicio: inicio.toISOString(),
+        fecha_hora_fin: fin.toISOString(),
+      };
+    });
+
+    await notificarCambio(opciones.notificaciones, {
+      destinatario: fila.cliente_email,
+      cliente_nombre: fila.cliente_nombre,
+      servicio: fila.servicio_nombre,
+      fecha_hora_inicio: inicio,
+      timezone: fila.tenant_timezone,
+      enlace: construirEnlace(token),
+    });
+
+    return resultado;
+  },
+
+  /**
+   * POST /turnos/{id}/acciones (T-14, RB-VNG-02/03/04, CA-CRG-04, EC-12):
+   * acciones del negocio sobre un turno del propio tenant. Sin límite de
+   * gracia; `motivo` obligatorio para cancelar (validado en el DTO, CA-CRG-04).
+   * Estados terminales → 409; turno inexistente/de otro tenant → 404.
+   */
+  async accion(
+    db: Database,
+    tenantId: string,
+    turnoId: string,
+    input: { accion: AccionTurno; motivo: string | null },
+    opciones: NotificacionOpciones = {},
+  ): Promise<TurnoAccionResultado> {
+    const ahora = opciones.ahora ?? new Date();
+    const fila = await turnoRepository.turnoConContextoPorId(
+      db,
+      tenantId,
+      turnoId,
+    );
+    if (fila === undefined) {
+      throw new NotFoundError("El turno no existe.");
+    }
+
+    switch (input.accion) {
+      case ACCION_TURNO.Confirmar:
+        return confirmarPorNegocio(db, fila);
+      case ACCION_TURNO.Cancelar:
+        return cancelarPorNegocio(db, fila, input.motivo, opciones, ahora);
+      case ACCION_TURNO.Completado:
+        return completarPorNegocio(db, fila, ahora);
+      case ACCION_TURNO.NoShow:
+        return noShowPorNegocio(db, fila, ahora);
+    }
   },
 };
