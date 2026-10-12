@@ -388,6 +388,7 @@ async function primerServicio(
 async function primerSlotLibre(
   app: FastifyInstance,
   servicioId: string,
+  minAheadMs = 0,
 ): Promise<string> {
   const res = await app.inject({
     method: "GET",
@@ -401,7 +402,7 @@ async function primerSlotLibre(
     .flatMap((d) => d.slots)
     .sort((a, b) => a.fecha_hora_inicio.localeCompare(b.fecha_hora_inicio));
   const slot = slots.find(
-    (s) => new Date(s.fecha_hora_inicio).getTime() >= Date.now(),
+    (s) => new Date(s.fecha_hora_inicio).getTime() >= Date.now() + minAheadMs,
   );
   if (slot === undefined) throw new Error("sin slots libres en el rango");
   return slot.slot_key;
@@ -411,8 +412,9 @@ async function reservar(
   app: FastifyInstance,
   servicioId: string,
   cliente: Record<string, string>,
+  minAheadMs = 0,
 ): Promise<{ turno_id: string; enlace_gestion: string }> {
-  const slotKey = await primerSlotLibre(app, servicioId);
+  const slotKey = await primerSlotLibre(app, servicioId, minAheadMs);
   const res = await app.inject({
     method: "POST",
     url: "/api/v1/turnos",
@@ -600,10 +602,18 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
       const db = await prepararBd();
       const app = await crearApp(db);
       const servicio = await primerServicio(app);
-      const creada = await reservar(app, servicio.id, {
-        nombre: "Dani Vera",
-        email: "dani@example.com",
-      });
+      // Slot ≥ 25 h en el futuro: el turno permanece "enviable" durante todo
+      // el backoff (5/15/60 min) sin cruzar el inicio del turno, de modo que
+      // el resultado no depende de la hora del día en que se corra el test.
+      const creada = await reservar(
+        app,
+        servicio.id,
+        {
+          nombre: "Dani Vera",
+          email: "dani@example.com",
+        },
+        25 * 3_600_000,
+      );
 
       await db
         .update(recordatorios)

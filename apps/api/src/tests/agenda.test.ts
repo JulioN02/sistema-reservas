@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { formatInTimeZone } from "date-fns-tz";
 import { migrate } from "drizzle-orm/node-postgres/migrator";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../app";
@@ -420,6 +421,31 @@ async function crearApp(db: Database): Promise<FastifyInstance> {
   });
 }
 
+/**
+ * Rango de un día laboral (lun–vie) estrictamente futuro en la zona del
+ * negocio, dentro de la ventana de reserva del seed (30 días). Hace el test
+ * independiente de la hora del día: un día futuro ofrece el día completo,
+ * mientras que "hoy" filtra los slots ya pasados (RB-AGD-06, EC-12).
+ */
+function rangoProximoDiaLaboral(timezone: string): {
+  desde: string;
+  hasta: string;
+} {
+  for (let dias = 1; dias <= 7; dias += 1) {
+    const candidato = new Date(Date.now() + dias * 86_400_000);
+    // `i` = día ISO de la semana (1 = lunes … 7 = domingo).
+    const diaSemana = Number(formatInTimeZone(candidato, timezone, "i"));
+    if (diaSemana <= 5) {
+      const siguiente = new Date(candidato.getTime() + 86_400_000);
+      return {
+        desde: formatInTimeZone(candidato, timezone, "yyyy-MM-dd"),
+        hasta: formatInTimeZone(siguiente, timezone, "yyyy-MM-dd"),
+      };
+    }
+  }
+  throw new Error("sin día laboral en la próxima semana");
+}
+
 describe.skipIf(!process.env.TEST_DATABASE_URL)(
   "agenda pública — endpoints (T-08)",
   () => {
@@ -462,10 +488,12 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
       if (servicio === undefined) throw new Error("sin servicios");
       expect(servicio.duracion_min).toBe(30);
 
-      // Lunes 2026-10-12 (dentro de la ventana del seed: 30 días desde hoy).
+      // Día laboral futuro dentro de la ventana del seed: día completo, sin
+      // slots pasados filtrados (test independiente de la hora del día).
+      const rango = rangoProximoDiaLaboral(TZ_BA);
       const res = await app.inject({
         method: "GET",
-        url: `/api/v1/agenda?servicio_id=${servicio.id}&desde=2026-10-12&hasta=2026-10-13`,
+        url: `/api/v1/agenda?servicio_id=${servicio.id}&desde=${rango.desde}&hasta=${rango.hasta}`,
       });
       expect(res.statusCode).toBe(200);
 
@@ -475,7 +503,7 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
       };
       expect(cuerpo.zona_horaria).toBe("America/Argentina/Buenos_Aires");
       expect(cuerpo.dias).toHaveLength(1);
-      expect(cuerpo.dias[0]?.fecha).toBe("2026-10-12");
+      expect(cuerpo.dias[0]?.fecha).toBe(rango.desde);
 
       // Seed: lun–vie 09:00–18:00, servicio 30 min → 18 slots (:00/:30).
       const slots = cuerpo.dias[0]?.slots ?? [];
@@ -486,7 +514,8 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
         const inicio = new Date(slot.fecha_hora_inicio).getTime();
         expect(fin - inicio).toBe(30 * 60 * 1000);
       }
-      expect(slots[0]?.fecha_hora_inicio).toBe("2026-10-12T12:00:00.000Z");
+      // Primer slot 09:00 local = 12:00Z (BA, UTC-3 sin DST).
+      expect(slots[0]?.fecha_hora_inicio).toBe(`${rango.desde}T12:00:00.000Z`);
 
       await app.close();
     });
