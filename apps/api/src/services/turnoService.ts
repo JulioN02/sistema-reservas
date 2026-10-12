@@ -721,9 +721,12 @@ export const turnoService = {
   },
 
   /**
-   * GET /turnos/{token} → TurnoGestion {estado, servicio,
-   * fecha_hora_inicio/fin, cliente_nombre} (diseño §4.2, aditivo). Sin
-   * tenant_id (CA-INT-04); 404/410 sin revelar datos (CMR-S3).
+   * GET /turnos/{token} → TurnoGestion {estado, servicio, servicio_id,
+   * zona_horaria, fecha_hora_inicio/fin, cliente_nombre} (diseño §4.2,
+   * aditivo). `servicio_id` + `zona_horaria` (zona del negocio) permiten a la
+   * SPA resolver el contexto del turno por id — no por nombre (revisión
+   * aditiva post-verify W1). Sin tenant_id (CA-INT-04); 404/410 sin revelar
+   * datos (CMR-S3).
    */
   async obtenerPorToken(
     db: Database,
@@ -734,6 +737,8 @@ export const turnoService = {
     return {
       estado: fila.estado,
       servicio: fila.servicio_nombre,
+      servicio_id: fila.servicio_id,
+      zona_horaria: fila.tenant_timezone,
       fecha_hora_inicio: fila.fecha_hora_inicio.toISOString(),
       fecha_hora_fin: fila.fecha_hora_fin.toISOString(),
       cliente_nombre: fila.cliente_nombre,
