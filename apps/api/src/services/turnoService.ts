@@ -13,8 +13,10 @@ import type {
   TurnoAccionResultado,
   TurnoCrearInput,
   TurnoCreado,
+  TurnoDetalle,
   TurnoGestion,
   TurnoReagendarInput,
+  TurnoResumen,
 } from "../dto/turnos";
 import { ACCION_TURNO } from "../dto/turnos";
 import {
@@ -29,9 +31,15 @@ import type { NotificationService } from "../notificaciones/notificationService"
 import { agendaRepository } from "../repositories/agendaRepository";
 import { conLockDeTenant, tenantRepository } from "../repositories/tenantScoped";
 import type { TurnoConContexto } from "../repositories/turnoRepository";
+import type {
+  HistorialFiltros,
+  TurnoDetalleFila,
+  TurnoResumenFila,
+} from "../repositories/turnoRepository";
 import { turnoRepository } from "../repositories/turnoRepository";
 import { generarTokenOpaco, hashToken } from "./authService";
 import { clienteService } from "./clienteService";
+import { eventoService } from "./eventoService";
 import {
   calcularSlots,
   inicioDelDiaEnZona,
@@ -349,7 +357,7 @@ async function confirmarPorNegocio(
       fila.id,
     );
     if (actualizado !== undefined) {
-      await turnoRepository.insertarEvento(txn, {
+      await eventoService.registrar(txn, {
         tenant_id: fila.tenant_id,
         turno_id: fila.id,
         cliente_id: fila.cliente_id,
@@ -398,7 +406,7 @@ async function cancelarPorNegocio(
       motivo,
     );
     if (actualizado !== undefined) {
-      await turnoRepository.insertarEvento(txn, {
+      await eventoService.registrar(txn, {
         tenant_id: fila.tenant_id,
         turno_id: fila.id,
         cliente_id: fila.cliente_id,
@@ -452,7 +460,7 @@ async function completarPorNegocio(
     if (actualizado === undefined) {
       throw new ConflictError("El turno alcanzó un estado final.");
     }
-    await turnoRepository.insertarEvento(txn, {
+    await eventoService.registrar(txn, {
       tenant_id: fila.tenant_id,
       turno_id: fila.id,
       cliente_id: fila.cliente_id,
@@ -494,7 +502,7 @@ async function noShowPorNegocio(
     if (actualizado === undefined) {
       throw new ConflictError("El turno alcanzó un estado final.");
     }
-    await turnoRepository.insertarEvento(txn, {
+    await eventoService.registrar(txn, {
       tenant_id: fila.tenant_id,
       turno_id: fila.id,
       cliente_id: fila.cliente_id,
@@ -505,6 +513,51 @@ async function noShowPorNegocio(
     });
     return { turno_id: fila.id, estado: TurnoEstado.NoShow };
   });
+}
+
+/**
+ * Mapea una fila de lista a TurnoResumen del contrato (T-15): fechas UTC → ISO
+ * 8601. Función pura (RB-VNG-01: la hora local la resuelve el cliente con la
+ * zona del negocio).
+ */
+export function aTurnoResumen(fila: TurnoResumenFila): TurnoResumen {
+  return {
+    id: fila.id,
+    estado: fila.estado,
+    cliente_nombre: fila.cliente_nombre,
+    servicio_nombre: fila.servicio_nombre,
+    fecha_hora_inicio: fila.fecha_hora_inicio.toISOString(),
+    fecha_hora_fin: fila.fecha_hora_fin.toISOString(),
+  };
+}
+
+/**
+ * Mapea una fila de detalle a TurnoDetalle del contrato (T-15): anida
+ * cliente/servicio, convierte `precio` (numeric → string en Drizzle) a número
+ * y serializa las fechas. Función pura.
+ */
+export function aTurnoDetalle(fila: TurnoDetalleFila): TurnoDetalle {
+  return {
+    id: fila.id,
+    estado: fila.estado,
+    motivo: fila.motivo,
+    fecha_hora_inicio: fila.fecha_hora_inicio.toISOString(),
+    fecha_hora_fin: fila.fecha_hora_fin.toISOString(),
+    cliente: {
+      nombre: fila.cliente_nombre,
+      email: fila.cliente_email,
+      telefono: fila.cliente_telefono,
+    },
+    servicio: {
+      id: fila.servicio_id,
+      nombre: fila.servicio_nombre,
+      duracion_min: fila.servicio_duracion_min,
+      precio:
+        fila.servicio_precio === null ? null : Number(fila.servicio_precio),
+    },
+    created_at: fila.created_at.toISOString(),
+    updated_at: fila.updated_at.toISOString(),
+  };
 }
 
 export const turnoService = {
@@ -652,7 +705,7 @@ export const turnoService = {
 
       // Evento reserva_creada en la MISMA tx (CA-MTE-01); payload §13 sin
       // PII (RB-MTE-04): solo instantes, canal de contacto y creador.
-      await turnoRepository.insertarEvento(tx, {
+      await eventoService.registrar(tx, {
         tenant_id: tenantId,
         turno_id: fila.id,
         cliente_id: cliente.id,
@@ -776,7 +829,7 @@ export const turnoService = {
       );
       if (actualizado !== undefined) {
         // Evento en la misma tx del cambio de estado (exactamente-1).
-        await turnoRepository.insertarEvento(txn, {
+        await eventoService.registrar(txn, {
           tenant_id: fila.tenant_id,
           turno_id: fila.id,
           cliente_id: fila.cliente_id,
@@ -851,7 +904,7 @@ export const turnoService = {
         null,
       );
       if (actualizado !== undefined) {
-        await turnoRepository.insertarEvento(txn, {
+        await eventoService.registrar(txn, {
           tenant_id: fila.tenant_id,
           turno_id: fila.id,
           cliente_id: fila.cliente_id,
@@ -1024,7 +1077,7 @@ export const turnoService = {
       if (actualizado === undefined) {
         throw new ConflictError("El turno alcanzó un estado final.");
       }
-      await turnoRepository.insertarEvento(tx, {
+      await eventoService.registrar(tx, {
         tenant_id: fila.tenant_id,
         turno_id: fila.id,
         cliente_id: fila.cliente_id,
@@ -1091,5 +1144,60 @@ export const turnoService = {
       case ACCION_TURNO.NoShow:
         return noShowPorNegocio(db, fila, ahora);
     }
+  },
+
+  /**
+   * Vista del día del negocio (T-15, VNG-S3/RB-VNG-01): turnos cuyo inicio cae
+   * en el día local `fecha` (YYYY-MM-DD) de la zona `timezone`, cronológicos.
+   * El rango [00:00 local, +1 día) se calcula con date-fns-tz (DST-safe).
+   */
+  async diaDelNegocio(
+    db: Database,
+    tenantId: string,
+    fecha: string,
+    timezone: string,
+  ): Promise<TurnoResumen[]> {
+    const inicio = fromZonedTime(`${fecha}T00:00:00`, timezone);
+    const fin = sumarDiasEnZona(inicio, 1, timezone);
+    const filas = await turnoRepository.turnosDelDia(
+      db,
+      tenantId,
+      inicio,
+      fin,
+    );
+    return filas.map(aTurnoResumen);
+  },
+
+  /**
+   * Historial filtrable del negocio (T-15, VNG-02/VNG-S6): estado y rango de
+   * fechas, orden descendente. Scoped por tenant (INT-S1).
+   */
+  async historial(
+    db: Database,
+    tenantId: string,
+    filtros: HistorialFiltros,
+  ): Promise<TurnoResumen[]> {
+    const filas = await turnoRepository.historialTurnos(db, tenantId, filtros);
+    return filas.map(aTurnoResumen);
+  },
+
+  /**
+   * Detalle de un turno del negocio (T-15, INT-S1): 404 si no existe o es de
+   * otro tenant (mismo camino, sin filtrar datos).
+   */
+  async detalle(
+    db: Database,
+    tenantId: string,
+    turnoId: string,
+  ): Promise<TurnoDetalle> {
+    const fila = await turnoRepository.turnoDetallePorId(
+      db,
+      tenantId,
+      turnoId,
+    );
+    if (fila === undefined) {
+      throw new NotFoundError("El turno no existe.");
+    }
+    return aTurnoDetalle(fila);
   },
 };

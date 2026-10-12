@@ -10,6 +10,7 @@ import {
   parsearParametrosServicio,
   parsearServicioInput,
 } from "../dto/agenda";
+import { parsearAgendaDiaQuery } from "../dto/turnos";
 import {
   NotFoundError,
   UnauthorizedError,
@@ -17,6 +18,7 @@ import {
 } from "../infra/errors";
 import { resolverTenantPublico } from "../infra/tenant";
 import { agendaService } from "../services/agendaService";
+import { turnoService } from "../services/turnoService";
 import { tenantRepository } from "../repositories/tenantScoped";
 
 /**
@@ -27,6 +29,7 @@ import { tenantRepository } from "../repositories/tenantScoped";
  * - GET /api/v1/agenda → 200 {zona_horaria, dias} (400/422/404).
  *
  * Negocio (T-09, sesión obligatoria — 401 sin cookie, RB-INT-03):
+ * - GET /api/v1/agenda/dia → 200 TurnoResumen[] del día (T-15, RB-VNG-01).
  * - GET/POST/PUT/DELETE /api/v1/agenda/horarios (409 solapamiento, RB-AGD-01).
  * - GET/POST/DELETE /api/v1/agenda/bloques (409 pisa turnos, AGD-S7).
  * - GET/POST/PUT/DELETE /api/v1/servicios + PATCH /servicios/{id}/parametros.
@@ -103,6 +106,27 @@ export function createAgendaController(deps: AgendaControllerDeps) {
       });
 
       return reply.send({ zona_horaria: tenant.timezone, dias });
+    },
+
+    /**
+     * GET /api/v1/agenda/dia?fecha=YYYY-MM-DD (T-15, negocio, VNG-S3): turnos
+     * del día local del negocio, cronológicos (RB-VNG-01). Sesión obligatoria
+     * (401 sin cookie — VNG-S7). Query malformada → 400; día inexistente → 422.
+     */
+    async agendaDelDia(request: FastifyRequest, reply: FastifyReply) {
+      const sesion = sesionDe(request);
+      const query = parsearAgendaDiaQuery(request.query);
+      const tenant = await tenantRepository.porId(deps.db, sesion.tenant_id);
+      if (tenant === undefined) {
+        throw new NotFoundError("El negocio no está configurado.");
+      }
+      const turnos = await turnoService.diaDelNegocio(
+        deps.db,
+        sesion.tenant_id,
+        query.fecha,
+        tenant.timezone,
+      );
+      return reply.send(turnos);
     },
 
     // --- Gestión de agenda del negocio (T-09) ---

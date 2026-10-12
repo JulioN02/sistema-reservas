@@ -63,3 +63,128 @@ body {
   color: #6b7280;
   font-size: 0.875rem;
 }
+
+/* Panel del negocio (T-17) */
+.panel__cabecera {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.panel__operador {
+  color: #6b7280;
+  margin-right: auto;
+}
+
+.panel__navegacion {
+  display: flex;
+  gap: 1rem;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 0.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.panel__navegacion a {
+  color: #374151;
+  text-decoration: none;
+}
+
+.panel__navegacion a.active {
+  font-weight: 700;
+  color: #1f2937;
+}
+
+.dashboard__selector,
+.historial__filtros,
+.gestion__campo,
+.login__campo {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.dashboard__turnos,
+.gestion__lista,
+.metricas__semanas {
+  list-style: none;
+  padding: 0;
+}
+
+.dashboard__turno,
+.gestion__lista li {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.dashboard__datos {
+  display: flex;
+  gap: 1rem;
+  min-width: 20rem;
+}
+
+.dashboard__hora {
+  font-weight: 700;
+}
+
+.acciones-turno__botones {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.metricas__tarjetas {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.metricas__kpi {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1rem;
+  background: #ffffff;
+}
+
+.metricas__valor {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0;
+}
+
+.historial__tabla {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.historial__tabla th,
+.historial__tabla td {
+  text-align: left;
+  padding: 0.5rem;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.gestion__seccion {
+  margin-bottom: 2rem;
+}
+
+.gestion__form {
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 0.75rem;
+  background: #ffffff;
+}
+
+.errores-campo,
+.login__error,
+.gestion__error {
+  color: #b91c1c;
+}
+
+.gestion__ok {
+  color: #15803d;
+}

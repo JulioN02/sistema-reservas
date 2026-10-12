@@ -69,3 +69,45 @@ export function horaDeSlotKey(slotKey: string, zonaHoraria: string): string {
   if (iso === undefined || iso === "") return slotKey;
   return formatearHoraLocal(iso, zonaHoraria);
 }
+
+/**
+ * Offset (minutos) de la zona respecto de UTC para un instante dado.
+ * `comoUtc - instante` da la diferencia entre la hora de pared en la zona y
+ * la hora UTC (negativo al oeste de Greenwich).
+ */
+function offsetMinutos(instante: Date, zonaHoraria: string): number {
+  const partes = new Intl.DateTimeFormat("en-US", {
+    timeZone: zonaHoraria,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  }).formatToParts(instante);
+  const valor = (tipo: string): number =>
+    Number(partes.find((parte) => parte.type === tipo)?.value ?? "0");
+  const comoUtc = Date.UTC(
+    valor("year"),
+    valor("month") - 1,
+    valor("day"),
+    valor("hour"),
+    valor("minute"),
+    valor("second"),
+  );
+  return (comoUtc - instante.getTime()) / 60_000;
+}
+
+/** Instante UTC del inicio del día `YYYY-MM-DD` en la zona del negocio (RB-VNG-01). */
+export function inicioDelDiaUtc(fecha: string, zonaHoraria: string): string {
+  const [anio, mes, dia] = fecha.split("-").map(Number);
+  const medianocheUtc = Date.UTC(anio ?? 1970, (mes ?? 1) - 1, dia ?? 1);
+  const offset = offsetMinutos(new Date(medianocheUtc), zonaHoraria);
+  return new Date(medianocheUtc - offset * 60_000).toISOString();
+}
+
+/** Instante UTC del fin (exclusivo) del día `YYYY-MM-DD` en la zona del negocio. */
+export function finDelDiaUtc(fecha: string, zonaHoraria: string): string {
+  return inicioDelDiaUtc(sumarDias(fecha, 1), zonaHoraria);
+}

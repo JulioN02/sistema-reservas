@@ -7,6 +7,7 @@ import type {
   SesionActiva,
 } from "../dto/auth";
 import { authRepository } from "../repositories/authRepository";
+import { tenantRepository } from "../repositories/tenantScoped";
 
 /**
  * AuthService (T-07) — lógica pura de sesiones opacas (A8, RB-VNG-05),
@@ -41,6 +42,19 @@ export function generarTokenOpaco(): string {
 /** sha256 hex del token: la BD nunca guarda el token en claro. */
 export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+/**
+ * Zona horaria IANA del tenant (RB-VNG-01): el panel la usa para presentar
+ * horas locales y calcular "hoy". La FK operador→tenant garantiza que exista;
+ * el fallback "UTC" es defensivo para no romper el login si faltara.
+ */
+async function zonaHorariaDelTenant(
+  db: Database,
+  tenantId: string,
+): Promise<string> {
+  const tenant = await tenantRepository.porId(db, tenantId);
+  return tenant?.timezone ?? "UTC";
 }
 
 async function verificarPassword(
@@ -96,6 +110,7 @@ export const authService = {
         operador_id: operador.id,
         email: operador.email,
         nombre: operador.nombre,
+        timezone: await zonaHorariaDelTenant(db, operador.tenant_id),
       },
       token,
     };
@@ -120,6 +135,7 @@ export const authService = {
         operador_id: fila.operador_id,
         email: fila.email,
         nombre: fila.nombre,
+        timezone: await zonaHorariaDelTenant(db, fila.tenant_id),
       },
     };
   },

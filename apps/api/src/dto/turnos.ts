@@ -1,6 +1,11 @@
 import { z } from "zod";
-import type { components } from "@sistema-reservas/contracts";
-import { ValidationError, type ErrorCampo } from "../infra/errors";
+import { format, parseISO } from "date-fns";
+import { TurnoEstado, type components } from "@sistema-reservas/contracts";
+import {
+  BadRequestError,
+  ValidationError,
+  type ErrorCampo,
+} from "../infra/errors";
 
 /**
  * DTOs del módulo turnos (T-10). zod es la fuente de verdad de validación
@@ -202,4 +207,96 @@ export function parsearAccionTurno(cuerpo: unknown): {
     accion: resultado.data.accion,
     motivo: resultado.data.motivo ?? null,
   };
+}
+
+// --- Vista negocio (T-15): día, historial y detalle ---
+
+/** TurnoResumen — vistas de lista del negocio (contrato, RB-VNG-01). */
+export type TurnoResumen = components["schemas"]["TurnoResumen"];
+
+/** TurnoDetalle — GET /turnos/{id} (contrato). */
+export type TurnoDetalle = components["schemas"]["TurnoDetalle"];
+
+/** UUID de path param (discriminación token vs id en `/turnos/{param}`). */
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * ¿El valor es un UUID? (T-15). Fastify no permite dos rutas con el mismo
+ * patrón `/turnos/:x`, así que `/turnos/{token}` (público) y `/turnos/{id}`
+ * (negocio) comparten handler y se discriminan por la forma del parámetro: un
+ * token de gestión es base64url de 43 caracteres y NUNCA coincide con un UUID.
+ */
+export function esUuid(valor: string): boolean {
+  return UUID_REGEX.test(valor);
+}
+
+/** Fecha YYYY-MM-DD (formato del contrato, zona del negocio — RB-VNG-01). */
+const fechaDiaSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, "Fecha con formato YYYY-MM-DD.");
+
+/** Query de GET /agenda/dia: la fecha del día (zona del negocio). */
+export const agendaDiaQuerySchema = z.object({ fecha: fechaDiaSchema });
+
+export type AgendaDiaQuery = z.infer<typeof agendaDiaQuerySchema>;
+
+/**
+ * Valida la query de GET /agenda/dia (T-15, contrato /agenda/dia):
+ * forma mal formada (falta `fecha` o no es YYYY-MM-DD) → 400; fecha con
+ * formato correcto pero día inexistente del calendario (2026-02-30) → 422.
+ */
+export function parsearAgendaDiaQuery(query: unknown): AgendaDiaQuery {
+  const forma = agendaDiaQuerySchema.safeParse(query);
+  if (!forma.success) {
+    const detalle = forma.error.issues
+      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+      .join("; ");
+    throw new BadRequestError(`Parámetros de query inválidos: ${detalle}`);
+  }
+  const fecha = forma.data.fecha;
+  const parsed = parseISO(fecha);
+  if (Number.isNaN(parsed.getTime()) || format(parsed, "yyyy-MM-dd") !== fecha) {
+    throw new ValidationError([
+      { campo: "fecha", mensaje: "La fecha no es un día válido del calendario." },
+    ]);
+  }
+  return forma.data;
+}
+
+/** Estados del turno para el filtro `estado` del historial (contrato). */
+const estadoTurnoSchema = z.enum([
+  TurnoEstado.Pendiente,
+  TurnoEstado.Confirmado,
+  TurnoEstado.Completado,
+  TurnoEstado.Cancelado,
+  TurnoEstado.NoShow,
+]);
+
+/** Fecha-hora ISO 8601 (con offset) → Date (contrato: `desde`/`hasta`). */
+const fechaHoraQuerySchema = z
+  .string()
+  .datetime({ offset: true, message: "Fecha ISO 8601 requerida." })
+  .transform((v) => new Date(v));
+
+/**
+ * Query de GET /turnos (historial, T-15/VNG-02): filtros opcionales por
+ * `estado` (enum del contrato) y rango `[desde, hasta]` (UTC). El contrato
+ * declara 422 (no 400) para este endpoint.
+ */
+export const historialQuerySchema = z.object({
+  estado: estadoTurnoSchema.optional(),
+  desde: fechaHoraQuerySchema.optional(),
+  hasta: fechaHoraQuerySchema.optional(),
+});
+
+export type HistorialQuery = z.infer<typeof historialQuerySchema>;
+
+/** Valida la query del historial (422 problem+json con `errores[]`). */
+export function parsearHistorialQuery(query: unknown): HistorialQuery {
+  const resultado = historialQuerySchema.safeParse(query);
+  if (!resultado.success) {
+    throw new ValidationError(erroresDeIssues(resultado.error.issues));
+  }
+  return resultado.data;
 }

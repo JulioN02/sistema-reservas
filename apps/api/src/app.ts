@@ -11,6 +11,7 @@ import type { NotificationService } from "./notificaciones/notificationService";
 import { authRoutes } from "./routes/auth";
 import { healthRoutes } from "./routes/health";
 import { agendaRoutes } from "./routes/agenda";
+import { metricasRoutes } from "./routes/metricas";
 import { turnosRoutes } from "./routes/turnos";
 
 export interface AppDeps {
@@ -68,6 +69,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   app.register(authRoutes, { db, env: deps.env });
   app.register(agendaRoutes, { db, env: deps.env });
   app.register(turnosRoutes, { db, env: deps.env, notificaciones });
+  app.register(metricasRoutes, { db });
 
   return app;
 }

@@ -3,7 +3,9 @@ import { EventoOrigen } from "@sistema-reservas/contracts";
 import type { Env } from "../config/env";
 import type { Database } from "../db";
 import {
+  esUuid,
   parsearAccionTurno,
+  parsearHistorialQuery,
   parsearTurnoCrear,
   parsearTurnoReagendar,
 } from "../dto/turnos";
@@ -21,9 +23,10 @@ import { turnoService, type OrigenReserva } from "../services/turnoService";
  * 201 TurnoCreado; 400/409 (alternativas)/422/500 — el contrato NO declara
  * 401 para este path (la reserva sin sesión es el flujo público).
  *
- * Enlace de gestión (T-11/T-14): GET /turnos/{token}, POST confirmar/cancelar/
- * reagendar (público, token opaco) y POST /turnos/{id}/acciones (negocio,
- * sesión obligatoria).
+ * Enlace de gestión (T-11/T-14): GET /turnos/{param} resuelve token (público)
+ * o id (negocio, T-15) según la forma del parámetro; POST confirmar/cancelar/
+ * reagendar (público, token opaco). Negocio: GET /turnos (historial, T-15) y
+ * POST /turnos/{id}/acciones (sesión obligatoria).
  */
 
 export interface TurnosControllerDeps {
@@ -62,14 +65,49 @@ export function createTurnosController(deps: TurnosControllerDeps) {
     },
 
     /**
-     * GET /api/v1/turnos/{token} (T-11) → 200 TurnoGestion. El token deriva
-     * turno → tenant implícito (RB-INT-02); 404/410 sin revelar datos
-     * (CMR-S3); nunca expone tenant_id (CA-INT-04).
+     * GET /api/v1/turnos/{param} — path compartido por dos contratos (Fastify
+     * no admite dos rutas con el mismo patrón `/turnos/:x`):
+     * - `{token}` público (T-11): el token deriva turno → tenant implícito
+     *   (RB-INT-02); 404/410 sin revelar datos (CMR-S3); nunca expone tenant_id.
+     * - `{id}` negocio (T-15): sesión obligatoria (401 sin cookie, VNG-S7);
+     *   detalle scoped al tenant, 404 si es de otro tenant (INT-S1).
+     * El discriminante es la forma del parámetro: un token de gestión es
+     * base64url de 43 caracteres y nunca coincide con un UUID.
      */
-    async obtenerPorToken(request: FastifyRequest, reply: FastifyReply) {
-      const { token } = request.params as { token: string };
-      const gestion = await turnoService.obtenerPorToken(deps.db, token);
+    async obtenerTurno(request: FastifyRequest, reply: FastifyReply) {
+      const { param } = request.params as { param: string };
+      if (esUuid(param)) {
+        // Contrato /turnos/{id}: sesión obligatoria → 401 sin cookie (VNG-S7).
+        if (request.sesion === undefined) {
+          throw new UnauthorizedError("Se requiere una sesión válida.");
+        }
+        const detalle = await turnoService.detalle(
+          deps.db,
+          request.sesion.tenant_id,
+          param,
+        );
+        return reply.status(200).send(detalle);
+      }
+      // Contrato /turnos/{token}: enlace público de gestión.
+      const gestion = await turnoService.obtenerPorToken(deps.db, param);
       return reply.status(200).send(gestion);
+    },
+
+    /**
+     * GET /api/v1/turnos (T-15, negocio, VNG-02/VNG-S6): historial filtrable
+     * por estado y rango de fechas, orden desc. Sesión obligatoria (401).
+     */
+    async historialTurnos(request: FastifyRequest, reply: FastifyReply) {
+      if (request.sesion === undefined) {
+        throw new UnauthorizedError("Se requiere una sesión válida.");
+      }
+      const filtros = parsearHistorialQuery(request.query);
+      const turnos = await turnoService.historial(
+        deps.db,
+        request.sesion.tenant_id,
+        filtros,
+      );
+      return reply.status(200).send(turnos);
     },
 
     /**

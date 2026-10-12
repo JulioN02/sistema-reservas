@@ -1,10 +1,9 @@
-import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { TurnoEstado } from "@sistema-reservas/contracts";
-import type { EventoOrigen, EventoTipo, RecordatorioCanal } from "@sistema-reservas/contracts";
+import type { RecordatorioCanal } from "@sistema-reservas/contracts";
 import type { Database } from "../db";
 import {
   clientes,
-  eventosMetricas,
   recordatorios,
   servicios,
   tenants,
@@ -75,6 +74,80 @@ const ESTADOS_ACTIVOS: TurnoEstado[] = [
   TurnoEstado.Confirmado,
 ];
 
+/**
+ * Fila de lista del negocio (T-15): columnas de TurnoResumen del contrato.
+ * Las fechas llegan como Date (UTC); el servicio las serializa a ISO.
+ */
+export interface TurnoResumenFila {
+  id: string;
+  estado: TurnoEstado;
+  cliente_nombre: string;
+  servicio_nombre: string;
+  fecha_hora_inicio: Date;
+  fecha_hora_fin: Date;
+}
+
+/** Fila de detalle (T-15): columnas de TurnoDetalle del contrato. */
+export interface TurnoDetalleFila {
+  id: string;
+  estado: TurnoEstado;
+  motivo: string | null;
+  fecha_hora_inicio: Date;
+  fecha_hora_fin: Date;
+  cliente_nombre: string;
+  cliente_email: string | null;
+  cliente_telefono: string | null;
+  servicio_id: string;
+  servicio_nombre: string;
+  servicio_duracion_min: number;
+  servicio_precio: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** Columnas de TurnoResumen (join cliente + servicio). */
+const COLUMNAS_RESUMEN = {
+  id: turnos.id,
+  estado: turnos.estado,
+  cliente_nombre: clientes.nombre,
+  servicio_nombre: servicios.nombre,
+  fecha_hora_inicio: turnos.fecha_hora_inicio,
+  fecha_hora_fin: turnos.fecha_hora_fin,
+} as const;
+
+/** Columnas de TurnoDetalle (join cliente + servicio). */
+const COLUMNAS_DETALLE = {
+  id: turnos.id,
+  estado: turnos.estado,
+  motivo: turnos.motivo,
+  fecha_hora_inicio: turnos.fecha_hora_inicio,
+  fecha_hora_fin: turnos.fecha_hora_fin,
+  cliente_nombre: clientes.nombre,
+  cliente_email: clientes.email,
+  cliente_telefono: clientes.telefono,
+  servicio_id: turnos.servicio_id,
+  servicio_nombre: servicios.nombre,
+  servicio_duracion_min: servicios.duracion_min,
+  servicio_precio: servicios.precio,
+  created_at: turnos.created_at,
+  updated_at: turnos.updated_at,
+} as const;
+
+/**
+ * Tope defensivo del historial (T-15): el contrato NO declara paginación
+ * (limit/offset), así que se limita el resultado a un máximo sensato para
+ * evitar respuestas sin cota. Con los filtros del panel el subconjunto
+ * esperado (CA-VNG-04) queda holgadamente por debajo de este tope.
+ */
+export const LIMITE_HISTORIAL = 200;
+
+/** Filtros opcionales del historial (estado + rango [desde, hasta]). */
+export interface HistorialFiltros {
+  estado?: TurnoEstado;
+  desde?: Date;
+  hasta?: Date;
+}
+
 export const turnoRepository = {
   /**
    * ¿Existe un turno ACTIVO (pendiente/confirmado) que solapa [inicio, fin)?
@@ -123,26 +196,6 @@ export const turnoRepository = {
     },
   ) {
     const filas = await db.insert(turnos).values(datos).returning();
-    return filas[0]!;
-  },
-
-  /** Evento de métricas en la MISMA tx del cambio de estado (CA-MTE-01). */
-  async insertarEvento(
-    db: Database,
-    datos: {
-      tenant_id: string;
-      turno_id: string;
-      cliente_id: string;
-      servicio_id: string;
-      tipo: EventoTipo;
-      payload: Record<string, unknown>;
-      origen: EventoOrigen;
-    },
-  ) {
-    const filas = await db
-      .insert(eventosMetricas)
-      .values(datos)
-      .returning();
     return filas[0]!;
   },
 
@@ -389,6 +442,83 @@ export const turnoRepository = {
         ),
       )
       .returning({ id: turnos.id, estado: turnos.estado });
+    return filas[0];
+  },
+
+  /**
+   * Turnos cuyo inicio cae en `[inicio, fin)` — vista del día (T-15,
+   * VNG-S3/RB-VNG-01). El rango lo calcula el servicio en la zona del
+   * negocio; orden cronológico ascendente. Scoped por tenant_id (INT-S1).
+   */
+  async turnosDelDia(
+    db: Database,
+    tenantId: string,
+    inicio: Date,
+    fin: Date,
+  ): Promise<TurnoResumenFila[]> {
+    return db
+      .select(COLUMNAS_RESUMEN)
+      .from(turnos)
+      .innerJoin(clientes, eq(clientes.id, turnos.cliente_id))
+      .innerJoin(servicios, eq(servicios.id, turnos.servicio_id))
+      .where(
+        filtroTenant(
+          tenantId,
+          turnos.tenant_id,
+          sql`${turnos.fecha_hora_inicio} >= ${inicio}`,
+          sql`${turnos.fecha_hora_inicio} < ${fin}`,
+        ),
+      )
+      .orderBy(asc(turnos.fecha_hora_inicio));
+  },
+
+  /**
+   * Historial filtrable (T-15, VNG-02/VNG-S6): por estado y/o rango
+   * `[desde, hasta]` inclusive, orden descendente por inicio, tope defensivo
+   * (LIMITE_HISTORIAL). Scoped por tenant_id (INT-S1).
+   */
+  async historialTurnos(
+    db: Database,
+    tenantId: string,
+    filtros: HistorialFiltros,
+  ): Promise<TurnoResumenFila[]> {
+    const condiciones: SQL[] = [];
+    if (filtros.estado !== undefined) {
+      condiciones.push(eq(turnos.estado, filtros.estado));
+    }
+    if (filtros.desde !== undefined) {
+      condiciones.push(sql`${turnos.fecha_hora_inicio} >= ${filtros.desde}`);
+    }
+    if (filtros.hasta !== undefined) {
+      condiciones.push(sql`${turnos.fecha_hora_inicio} <= ${filtros.hasta}`);
+    }
+    return db
+      .select(COLUMNAS_RESUMEN)
+      .from(turnos)
+      .innerJoin(clientes, eq(clientes.id, turnos.cliente_id))
+      .innerJoin(servicios, eq(servicios.id, turnos.servicio_id))
+      .where(filtroTenant(tenantId, turnos.tenant_id, ...condiciones))
+      .orderBy(desc(turnos.fecha_hora_inicio))
+      .limit(LIMITE_HISTORIAL);
+  },
+
+  /**
+   * Detalle por id DENTRO del tenant (T-15, INT-S1): `undefined` si no existe
+   * o si el turno es de otro tenant (404 sin filtrar datos — mismo camino que
+   * inexistente).
+   */
+  async turnoDetallePorId(
+    db: Database,
+    tenantId: string,
+    turnoId: string,
+  ): Promise<TurnoDetalleFila | undefined> {
+    const filas = await db
+      .select(COLUMNAS_DETALLE)
+      .from(turnos)
+      .innerJoin(clientes, eq(clientes.id, turnos.cliente_id))
+      .innerJoin(servicios, eq(servicios.id, turnos.servicio_id))
+      .where(and(eq(turnos.id, turnoId), eq(turnos.tenant_id, tenantId)))
+      .limit(1);
     return filas[0];
   },
 };

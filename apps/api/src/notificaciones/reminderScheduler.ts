@@ -6,7 +6,7 @@ import {
 import type { Database } from "../db";
 import type { RecordatorioPendiente } from "../repositories/recordatorioRepository";
 import { recordatorioRepository } from "../repositories/recordatorioRepository";
-import { turnoRepository } from "../repositories/turnoRepository";
+import { eventoService } from "../services/eventoService";
 import { construirEnlace } from "./channel";
 import type { Notificacion, NotificacionLogger } from "./channel";
 import type { NotificationService } from "./notificationService";
@@ -82,7 +82,7 @@ async function insertarEventoRecordatorio(
   tipo: EventoTipo,
   payload: Record<string, unknown>,
 ): Promise<void> {
-  await turnoRepository.insertarEvento(db, {
+  await eventoService.registrar(db, {
     tenant_id: fila.tenant_id,
     turno_id: fila.turno_id,
     cliente_id: fila.cliente_id,
