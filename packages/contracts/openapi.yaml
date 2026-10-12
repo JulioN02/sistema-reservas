@@ -1114,8 +1114,8 @@ components:
           $ref: "#/components/schemas/TurnoEstado"
         enlace_gestion:
           type: string
-          format: uri
-          description: URL de gestión del turno (`/g/{token}`).
+          format: uri-reference
+          description: URL de gestión del turno (`/g/{token}`, relativa al origen de la app).
         cliente_id:
           type: string
           format: uuid
