@@ -145,6 +145,17 @@ describe("openapi.yaml — conformancia con el diseño §4.2", () => {
     }
   });
 
+  it("OperadorSesion expone la zona horaria del negocio como obligatoria (RB-VNG-01)", () => {
+    const operador = spec.components.schemas.OperadorSesion;
+    expect(operador.required).toContain("timezone");
+    expect(operador.properties.timezone.type).toBe("string");
+    // Aditivo: los campos previos se conservan (no breaking, INT-05).
+    for (const campo of ["operador_id", "email", "nombre"]) {
+      expect(operador.required).toContain(campo);
+      expect(operador.properties[campo]).toBeDefined();
+    }
+  });
+
   it("consentimiento es obligatorio y debe ser true (PRV-01)", () => {
     const turnoCrear = spec.components.schemas.TurnoCrearInput;
     expect(turnoCrear.required).toContain("consentimiento");

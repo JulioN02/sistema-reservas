@@ -577,12 +577,15 @@ export interface components {
             email: string;
             password: string;
         };
+        /** @description Operador autenticado. `timezone` es la zona horaria IANA del negocio (RB-VNG-01), para que el panel presente horas locales y calcule "hoy" sin adivinar la zona del navegador. */
         OperadorSesion: {
             /** Format: uuid */
             operador_id: string;
             /** Format: email */
             email: string;
             nombre: string;
+            /** @description Zona horaria IANA del negocio (p. ej. America/Argentina/Buenos_Aires). */
+            timezone: string;
         };
         /** @description Horario recurrente (hora local de pared; la conversión UTC maneja DST — AD-06). */
         HorarioInput: {

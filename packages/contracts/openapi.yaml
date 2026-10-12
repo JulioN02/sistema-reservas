@@ -1180,7 +1180,11 @@ components:
           minLength: 8
     OperadorSesion:
       type: object
-      required: [operador_id, email, nombre]
+      required: [operador_id, email, nombre, timezone]
+      description: >
+        Operador autenticado. `timezone` es la zona horaria IANA del negocio
+        (RB-VNG-01), para que el panel presente horas locales y calcule "hoy"
+        sin adivinar la zona del navegador.
       properties:
         operador_id:
           type: string
@@ -1190,6 +1194,9 @@ components:
           format: email
         nombre:
           type: string
+        timezone:
+          type: string
+          description: Zona horaria IANA del negocio (p. ej. America/Argentina/Buenos_Aires).
     HorarioInput:
       type: object
       required: [dia_semana, hora_inicio, hora_fin, timezone]
