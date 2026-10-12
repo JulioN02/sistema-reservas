@@ -6,6 +6,7 @@ import {
   crearRequireSession,
   SESION_COOKIE,
 } from "../infra/authMiddleware";
+import { RATE_LIMIT_MUTACION, requerirJson } from "../infra/security";
 import { authService } from "../services/authService";
 
 /**
@@ -64,6 +65,18 @@ export const agendaRoutes: FastifyPluginAsync<AgendaRouteOptions> = async (
     controller.agendaDelDia,
   );
 
+  // Mutaciones de negocio (T-18, diseño §8): rate limit general por IP + guard
+  // CSRF (Content-Type: application/json obligatorio). DELETE no lleva cuerpo
+  // ni es alcanzable desde un formulario cross-site → solo rate limit.
+  const mutacionJson = () => ({
+    preHandler: [requireSession, requerirJson],
+    config: { rateLimit: RATE_LIMIT_MUTACION },
+  });
+  const mutacionSinCuerpo = () => ({
+    preHandler: requireSession,
+    config: { rateLimit: RATE_LIMIT_MUTACION },
+  });
+
   // Negocio — horarios recurrentes
   app.get(
     "/api/v1/agenda/horarios",
@@ -72,17 +85,17 @@ export const agendaRoutes: FastifyPluginAsync<AgendaRouteOptions> = async (
   );
   app.post(
     "/api/v1/agenda/horarios",
-    { preHandler: requireSession },
+    mutacionJson(),
     controller.crearHorario,
   );
   app.put(
     "/api/v1/agenda/horarios/:id",
-    { preHandler: requireSession },
+    mutacionJson(),
     controller.actualizarHorario,
   );
   app.delete(
     "/api/v1/agenda/horarios/:id",
-    { preHandler: requireSession },
+    mutacionSinCuerpo(),
     controller.eliminarHorario,
   );
 
@@ -94,34 +107,34 @@ export const agendaRoutes: FastifyPluginAsync<AgendaRouteOptions> = async (
   );
   app.post(
     "/api/v1/agenda/bloques",
-    { preHandler: requireSession },
+    mutacionJson(),
     controller.crearBloque,
   );
   app.delete(
     "/api/v1/agenda/bloques/:id",
-    { preHandler: requireSession },
+    mutacionSinCuerpo(),
     controller.eliminarBloque,
   );
 
   // Negocio — servicios (CRUD + parámetros)
   app.post(
     "/api/v1/servicios",
-    { preHandler: requireSession },
+    mutacionJson(),
     controller.crearServicio,
   );
   app.put(
     "/api/v1/servicios/:id",
-    { preHandler: requireSession },
+    mutacionJson(),
     controller.actualizarServicio,
   );
   app.delete(
     "/api/v1/servicios/:id",
-    { preHandler: requireSession },
+    mutacionSinCuerpo(),
     controller.eliminarServicio,
   );
   app.patch(
     "/api/v1/servicios/:id/parametros",
-    { preHandler: requireSession },
+    mutacionJson(),
     controller.actualizarParametrosServicio,
   );
 };
