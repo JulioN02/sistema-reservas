@@ -39,6 +39,7 @@ import type {
 import { turnoRepository } from "../repositories/turnoRepository";
 import { generarTokenOpaco, hashToken } from "./authService";
 import { clienteService } from "./clienteService";
+import { eventoService } from "./eventoService";
 import {
   calcularSlots,
   inicioDelDiaEnZona,
@@ -356,7 +357,7 @@ async function confirmarPorNegocio(
       fila.id,
     );
     if (actualizado !== undefined) {
-      await turnoRepository.insertarEvento(txn, {
+      await eventoService.registrar(txn, {
         tenant_id: fila.tenant_id,
         turno_id: fila.id,
         cliente_id: fila.cliente_id,
@@ -405,7 +406,7 @@ async function cancelarPorNegocio(
       motivo,
     );
     if (actualizado !== undefined) {
-      await turnoRepository.insertarEvento(txn, {
+      await eventoService.registrar(txn, {
         tenant_id: fila.tenant_id,
         turno_id: fila.id,
         cliente_id: fila.cliente_id,
@@ -459,7 +460,7 @@ async function completarPorNegocio(
     if (actualizado === undefined) {
       throw new ConflictError("El turno alcanzó un estado final.");
     }
-    await turnoRepository.insertarEvento(txn, {
+    await eventoService.registrar(txn, {
       tenant_id: fila.tenant_id,
       turno_id: fila.id,
       cliente_id: fila.cliente_id,
@@ -501,7 +502,7 @@ async function noShowPorNegocio(
     if (actualizado === undefined) {
       throw new ConflictError("El turno alcanzó un estado final.");
     }
-    await turnoRepository.insertarEvento(txn, {
+    await eventoService.registrar(txn, {
       tenant_id: fila.tenant_id,
       turno_id: fila.id,
       cliente_id: fila.cliente_id,
@@ -704,7 +705,7 @@ export const turnoService = {
 
       // Evento reserva_creada en la MISMA tx (CA-MTE-01); payload §13 sin
       // PII (RB-MTE-04): solo instantes, canal de contacto y creador.
-      await turnoRepository.insertarEvento(tx, {
+      await eventoService.registrar(tx, {
         tenant_id: tenantId,
         turno_id: fila.id,
         cliente_id: cliente.id,
@@ -828,7 +829,7 @@ export const turnoService = {
       );
       if (actualizado !== undefined) {
         // Evento en la misma tx del cambio de estado (exactamente-1).
-        await turnoRepository.insertarEvento(txn, {
+        await eventoService.registrar(txn, {
           tenant_id: fila.tenant_id,
           turno_id: fila.id,
           cliente_id: fila.cliente_id,
@@ -903,7 +904,7 @@ export const turnoService = {
         null,
       );
       if (actualizado !== undefined) {
-        await turnoRepository.insertarEvento(txn, {
+        await eventoService.registrar(txn, {
           tenant_id: fila.tenant_id,
           turno_id: fila.id,
           cliente_id: fila.cliente_id,
@@ -1076,7 +1077,7 @@ export const turnoService = {
       if (actualizado === undefined) {
         throw new ConflictError("El turno alcanzó un estado final.");
       }
-      await turnoRepository.insertarEvento(tx, {
+      await eventoService.registrar(tx, {
         tenant_id: fila.tenant_id,
         turno_id: fila.id,
         cliente_id: fila.cliente_id,

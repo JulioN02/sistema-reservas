@@ -1,10 +1,9 @@
 import { and, asc, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { TurnoEstado } from "@sistema-reservas/contracts";
-import type { EventoOrigen, EventoTipo, RecordatorioCanal } from "@sistema-reservas/contracts";
+import type { RecordatorioCanal } from "@sistema-reservas/contracts";
 import type { Database } from "../db";
 import {
   clientes,
-  eventosMetricas,
   recordatorios,
   servicios,
   tenants,
@@ -197,26 +196,6 @@ export const turnoRepository = {
     },
   ) {
     const filas = await db.insert(turnos).values(datos).returning();
-    return filas[0]!;
-  },
-
-  /** Evento de métricas en la MISMA tx del cambio de estado (CA-MTE-01). */
-  async insertarEvento(
-    db: Database,
-    datos: {
-      tenant_id: string;
-      turno_id: string;
-      cliente_id: string;
-      servicio_id: string;
-      tipo: EventoTipo;
-      payload: Record<string, unknown>;
-      origen: EventoOrigen;
-    },
-  ) {
-    const filas = await db
-      .insert(eventosMetricas)
-      .values(datos)
-      .returning();
     return filas[0]!;
   },
 
