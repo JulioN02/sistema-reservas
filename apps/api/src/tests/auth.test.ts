@@ -108,12 +108,19 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)("auth — login/logout/me (T-07)
     expect(res.statusCode).toBe(200);
     expect(res.headers["content-type"]).toContain("application/json");
 
-    // OperadorSesion: solo ids/nombre/email, nunca secrets (hash).
+    // OperadorSesion: solo ids/nombre/email + zona horaria, nunca secrets (hash).
     const cuerpo = res.json();
-    expect(Object.keys(cuerpo).sort()).toEqual(["email", "nombre", "operador_id"]);
+    expect(Object.keys(cuerpo).sort()).toEqual([
+      "email",
+      "nombre",
+      "operador_id",
+      "timezone",
+    ]);
     expect(cuerpo.email).toBe(OPERADOR_EMAIL);
     expect(cuerpo.nombre).toBe("Operador Demo");
     expect(cuerpo.operador_id).toMatch(/^[0-9a-f-]{36}$/);
+    // RB-VNG-01: la sesión trae la zona horaria IANA del negocio (seed).
+    expect(cuerpo.timezone).toBe("America/Argentina/Buenos_Aires");
     expect(JSON.stringify(cuerpo)).not.toContain("password");
 
     // Cookie sid: opaca, httpOnly, SameSite=Lax, sin Secure en dev.
