@@ -122,6 +122,8 @@ paths:
                 $ref: "#/components/schemas/AgendaResponse"
         "400":
           $ref: "#/components/responses/SolicitudInvalida"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
         "422":
           $ref: "#/components/responses/Validacion"
         "500":

@@ -123,4 +123,46 @@ describe("manejador central de errores (RFC 7807)", () => {
     expect(body.errores[0].campo).toBe("body");
     await app.close();
   });
+
+  it("W1: body JSON malformado → 400 problem+json (honra el statusCode de Fastify)", async () => {
+    const app = await buildApp({
+      env,
+      loggerOptions,
+      checkDb: async () => true,
+    });
+    app.post("/demo/json", () => ({ ok: true }));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/demo/json",
+      headers: { "content-type": "application/json" },
+      payload: "{ not json",
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.headers["content-type"]).toContain("application/problem+json");
+    const body = res.json();
+    expect(body.type).toBe(`${PROBLEM_BASE_URI}/solicitud-invalida`);
+    expect(body.status).toBe(400);
+    await app.close();
+  });
+
+  it("W1 (triangulación): media type sin parser → 415 problem+json", async () => {
+    const app = await buildApp({
+      env,
+      loggerOptions,
+      checkDb: async () => true,
+    });
+    app.post("/demo/json", () => ({ ok: true }));
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/demo/json",
+      headers: { "content-type": "application/xml" },
+      payload: "<a/>",
+    });
+    expect(res.statusCode).toBe(415);
+    expect(res.headers["content-type"]).toContain("application/problem+json");
+    expect(res.json().status).toBe(415);
+    await app.close();
+  });
 });

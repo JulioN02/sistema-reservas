@@ -1,5 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import cookie from "@fastify/cookie";
+import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import type { LoggerOptions } from "pino";
 import type { Env } from "./config/env";
@@ -60,7 +62,29 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
 
   // Sesiones opacas del operador (cookie `sid`, RB-VNG-05).
   app.register(cookie);
-  // Rate limit bajo demanda del login (5 fallos → 429/15 min, VNG-S2).
+  // Headers de seguridad (diseño §8): CSP estricta + nosniff y resto de
+  // defaults de helmet. La API solo sirve JSON, así que una CSP restrictiva
+  // no rompe la SPA (que vive en otro origen). CORP `cross-origin` para que
+  // la SPA configurada en CORS_ORIGIN pueda leer las respuestas.
+  app.register(helmet, {
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'none'"],
+        baseUri: ["'none'"],
+        frameAncestors: ["'none'"],
+        formAction: ["'none'"],
+      },
+    },
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  });
+  // CORS con origen específico (nunca `*`) + credenciales (cookie de sesión).
+  app.register(cors, {
+    origin: deps.env.CORS_ORIGIN,
+    credentials: true,
+  });
+  // Rate limit bajo demanda del login (5 fallos → 429/15 min, VNG-S2) y de las
+  // rutas de mutación (`config.rateLimit`, diseño §8). `global: false`: el
+  // límite general NO pisa el del login.
   app.register(rateLimit, { global: false });
 
   app.register(healthRoutes, {

@@ -9,6 +9,7 @@ import {
   tenants,
   turnos,
 } from "../db/schema";
+import type { Cliente } from "../db/schema";
 import { filtroTenant } from "./tenantScoped";
 
 /**
@@ -18,6 +19,9 @@ import { filtroTenant } from "./tenantScoped";
  * (diseño §5); los insert de turno/evento/recordatorio se ejecutan SIEMPRE
  * dentro de la misma transacción (`conLockDeTenant`) — CA-MTE-01.
  */
+
+/** Marcador de PII eliminada en la anonimización (PRV-02). No es PII. */
+export const MARCA_ELIMINADO = "[eliminado]";
 
 /**
  * Turno con todo el contexto necesario para gestión/cancelación/reagenda
@@ -283,6 +287,36 @@ export const turnoRepository = {
       .where(filtroTenant(tenantId, clientes.tenant_id, eq(clientes.id, id)))
       .returning();
     return filas[0]!;
+  },
+
+  /**
+   * Anonimiza la PII de un cliente (PRV-02, R-D7). Conserva `id`, `tenant_id`
+   * y la relación con turnos/eventos (retención sin PII). Scoped por tenant_id
+   * (RB-INT-01): `undefined` si el cliente no existe en ese tenant.
+   *
+   * Estrategia (ver Reporte de desviaciones de T-18): el CHECK
+   * `clientes_canal_check` exige al menos un canal de contacto, así que email y
+   * teléfono NO pueden quedar ambos en NULL. El email SÍ se vacía a NULL —de
+   * otro modo el índice único parcial `(tenant_id, lower(email))` colisionaría
+   * al anonimizar dos clientes del mismo tenant con el mismo marcador—; el
+   * teléfono conserva el marcador no-PII "[eliminado]" para satisfacer el CHECK.
+   */
+  async anonimizarCliente(
+    db: Database,
+    tenantId: string,
+    id: string,
+  ): Promise<Cliente | undefined> {
+    const filas = await db
+      .update(clientes)
+      .set({
+        nombre: MARCA_ELIMINADO,
+        email: null,
+        telefono: MARCA_ELIMINADO,
+        updated_at: new Date(),
+      })
+      .where(filtroTenant(tenantId, clientes.tenant_id, eq(clientes.id, id)))
+      .returning();
+    return filas[0];
   },
 
   /**

@@ -136,6 +136,57 @@ function validationDeFastify(error: FastifyError): ValidationError {
   return new ValidationError(errores);
 }
 
+/**
+ * ¿Es un error de CLIENTE (4xx) emitido por Fastify y no por el dominio?
+ * Cubre body JSON malformado (400), media type sin parser (415), payload
+ * demasiado grande (413) y el 429 del rate-limit general, entre otros.
+ * Es un type guard: estrecha `statusCode` a `number` en el branch.
+ */
+function esErrorDeCliente(
+  error: FastifyError,
+): error is FastifyError & { statusCode: number } {
+  return (
+    typeof error.statusCode === "number" &&
+    error.statusCode >= 400 &&
+    error.statusCode < 500
+  );
+}
+
+/**
+ * Traduce un statusCode 4xx de Fastify a un AppError con `type`/`title`
+ * coherentes con el contrato RFC 7807. El detalle es genérico a propósito:
+ * nunca se filtra el mensaje interno del parser.
+ */
+function problemDeStatus(status: number): AppError {
+  switch (status) {
+    case 400:
+      return new BadRequestError();
+    case 413:
+      return new AppError({
+        status: 413,
+        code: "payload-demasiado-grande",
+        title: "Contenido demasiado grande",
+        detail: "El cuerpo de la petición excede el tamaño permitido.",
+      });
+    case 415:
+      return new AppError({
+        status: 415,
+        code: "tipo-no-soportado",
+        title: "Tipo de contenido no soportado",
+        detail: "El cuerpo debe enviarse como application/json.",
+      });
+    case 429:
+      return new TooManyRequestsError();
+    default:
+      return new AppError({
+        status,
+        code: "solicitud-invalida",
+        title: "Solicitud inválida",
+        detail: "La petición no puede procesarse.",
+      });
+  }
+}
+
 export function createErrorHandler(logger: ErrorLogger) {
   return (
     error: FastifyError,
@@ -157,6 +208,18 @@ export function createErrorHandler(logger: ErrorLogger) {
         .status(validationError.status)
         .type("application/problem+json")
         .send(validationError.toProblemJson(instance));
+    }
+
+    // W1: honrar el statusCode de los errores de cliente de Fastify (body
+    // malformado → 400, media type no soportado → 415, rate-limit → 429, …)
+    // ANTES del branch genérico 500. Alinea con el contrato (400 declarado en
+    // los paths) y con el formato problem+json.
+    if (esErrorDeCliente(error)) {
+      const cliente = problemDeStatus(error.statusCode);
+      return reply
+        .status(cliente.status)
+        .type("application/problem+json")
+        .send(cliente.toProblemJson(instance));
     }
 
     // Error inesperado: respuesta genérica sin internals, log con request_id.

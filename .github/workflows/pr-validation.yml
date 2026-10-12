@@ -110,6 +110,10 @@ jobs:
         env:
           TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/sistema_reservas_test
         run: pnpm test
+      - name: Coverage gate (critical services >= 70% lines)
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5433/sistema_reservas_test
+        run: pnpm --filter @sistema-reservas/api test:coverage
       - name: Build
         run: pnpm build
       - name: Contract lint (redocly)

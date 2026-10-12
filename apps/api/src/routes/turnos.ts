@@ -3,6 +3,7 @@ import type { Env } from "../config/env";
 import type { Database } from "../db";
 import { createTurnosController } from "../controllers/turnos";
 import { crearRequireSession, SESION_COOKIE } from "../infra/authMiddleware";
+import { RATE_LIMIT_MUTACION, requerirJson } from "../infra/security";
 import type { NotificationService } from "../notificaciones/notificationService";
 import { authService } from "../services/authService";
 
@@ -57,7 +58,10 @@ export const turnosRoutes: FastifyPluginAsync<TurnosRouteOptions> = async (
 
   app.post(
     "/api/v1/turnos",
-    { preHandler: sesionOpcional(opts.db) },
+    {
+      preHandler: [sesionOpcional(opts.db), requerirJson],
+      config: { rateLimit: RATE_LIMIT_MUTACION },
+    },
     controller.crearTurno,
   );
   // Historial de negocio (T-15, sesión obligatoria; 401 sin cookie — VNG-S7).
@@ -75,13 +79,30 @@ export const turnosRoutes: FastifyPluginAsync<TurnosRouteOptions> = async (
     { preHandler: sesionOpcional(opts.db) },
     controller.obtenerTurno,
   );
-  app.post("/api/v1/turnos/:token/confirmar", controller.confirmarTurno);
-  app.post("/api/v1/turnos/:token/cancelar", controller.cancelarTurno);
-  app.post("/api/v1/turnos/:token/reagendar", controller.reagendarTurno);
+  // Mutaciones del enlace de gestión (públicas): rate limit general + guard
+  // CSRF (JSON obligatorio) — diseño §8.
+  app.post(
+    "/api/v1/turnos/:token/confirmar",
+    { preHandler: requerirJson, config: { rateLimit: RATE_LIMIT_MUTACION } },
+    controller.confirmarTurno,
+  );
+  app.post(
+    "/api/v1/turnos/:token/cancelar",
+    { preHandler: requerirJson, config: { rateLimit: RATE_LIMIT_MUTACION } },
+    controller.cancelarTurno,
+  );
+  app.post(
+    "/api/v1/turnos/:token/reagendar",
+    { preHandler: requerirJson, config: { rateLimit: RATE_LIMIT_MUTACION } },
+    controller.reagendarTurno,
+  );
   // Acciones de negocio (T-14, sesión obligatoria; 401 sin cookie — VNG-S7).
   app.post(
     "/api/v1/turnos/:id/acciones",
-    { preHandler: requireSession },
+    {
+      preHandler: [requireSession, requerirJson],
+      config: { rateLimit: RATE_LIMIT_MUTACION },
+    },
     controller.accionTurno,
   );
 };

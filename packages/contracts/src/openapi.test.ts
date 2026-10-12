@@ -16,7 +16,7 @@ const inventario: Record<string, { metodos: Record<string, number[]> }> = {
   "/servicios": {
     metodos: { get: [200, 401, 500], post: [201, 401, 422, 500] },
   },
-  "/agenda": { metodos: { get: [200, 400, 422, 500] } },
+  "/agenda": { metodos: { get: [200, 400, 404, 422, 500] } },
   "/turnos": {
     metodos: {
       post: [201, 400, 409, 422, 500],
