@@ -1121,7 +1121,14 @@ components:
           format: uuid
     TurnoGestion:
       type: object
-      required: [estado, servicio, fecha_hora_inicio, fecha_hora_fin, cliente_nombre]
+      required:
+        - estado
+        - servicio
+        - servicio_id
+        - zona_horaria
+        - fecha_hora_inicio
+        - fecha_hora_fin
+        - cliente_nombre
       description: Datos mínimos para la página de gestión del enlace (sin PII del cliente).
       properties:
         estado:
@@ -1129,6 +1136,13 @@ components:
         servicio:
           type: string
           description: Nombre del servicio.
+        servicio_id:
+          type: string
+          format: uuid
+          description: Identificador del servicio del turno (resolución por id, no por nombre).
+        zona_horaria:
+          type: string
+          description: Zona horaria IANA del negocio.
         fecha_hora_inicio:
           type: string
           format: date-time

@@ -544,6 +544,13 @@ export interface components {
             estado: components["schemas"]["TurnoEstado"];
             /** @description Nombre del servicio. */
             servicio: string;
+            /**
+             * Format: uuid
+             * @description Identificador del servicio del turno (resolución por id, no por nombre).
+             */
+            servicio_id: string;
+            /** @description Zona horaria IANA del negocio. */
+            zona_horaria: string;
             /** Format: date-time */
             fecha_hora_inicio: string;
             /** Format: date-time */

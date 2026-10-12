@@ -7,6 +7,7 @@ import {
   eventosMetricas,
   recordatorios,
   servicios,
+  tenants,
   turnos,
 } from "../db/schema";
 import { filtroTenant } from "./tenantScoped";
@@ -19,28 +20,74 @@ import { filtroTenant } from "./tenantScoped";
  * dentro de la misma transacción (`conLockDeTenant`) — CA-MTE-01.
  */
 
-export interface TurnoGestionFila {
+/**
+ * Turno con todo el contexto necesario para gestión/cancelación/reagenda
+ * (T-11/T-14): estado, horario, cliente, servicio (duración, ventana, gracia)
+ * y datos de contacto del negocio (RB-CRG-02). Se resuelve tanto por token
+ * (enlace público, derivación implícita turno → tenant) como por id scoped.
+ */
+export interface TurnoConContexto {
   id: string;
   tenant_id: string;
   estado: TurnoEstado;
   fecha_hora_inicio: Date;
   fecha_hora_fin: Date;
+  motivo: string | null;
+  token_hash: string;
   cliente_id: string;
-  servicio_id: string;
-  servicio: string;
   cliente_nombre: string;
+  cliente_email: string | null;
+  servicio_id: string;
+  servicio_nombre: string;
+  servicio_duracion_min: number;
+  servicio_booking_window_days: number;
+  servicio_grace_min: number;
+  tenant_timezone: string;
+  tenant_email_contacto: string | null;
+  tenant_telefono_contacto: string | null;
 }
+
+/** Columnas del contexto de gestión (mismo shape para token e id). */
+const COLUMNAS_CONTEXTO = {
+  id: turnos.id,
+  tenant_id: turnos.tenant_id,
+  estado: turnos.estado,
+  fecha_hora_inicio: turnos.fecha_hora_inicio,
+  fecha_hora_fin: turnos.fecha_hora_fin,
+  motivo: turnos.motivo,
+  token_hash: turnos.token_hash,
+  cliente_id: turnos.cliente_id,
+  cliente_nombre: clientes.nombre,
+  cliente_email: clientes.email,
+  servicio_id: turnos.servicio_id,
+  servicio_nombre: servicios.nombre,
+  servicio_duracion_min: servicios.duracion_min,
+  servicio_booking_window_days: servicios.booking_window_days,
+  servicio_grace_min: servicios.cancellation_grace_minutes,
+  tenant_timezone: tenants.timezone,
+  tenant_email_contacto: tenants.email_contacto,
+  tenant_telefono_contacto: tenants.telefono_contacto,
+} as const;
+
+/** Estados activos (ocupan slot): pendiente/confirmado. */
+const ESTADOS_ACTIVOS: TurnoEstado[] = [
+  TurnoEstado.Pendiente,
+  TurnoEstado.Confirmado,
+];
 
 export const turnoRepository = {
   /**
    * ¿Existe un turno ACTIVO (pendiente/confirmado) que solapa [inicio, fin)?
    * Chequeo rápido del claim (diseño §5 paso 2), bajo el mutex del tenant.
+   * `excluirTurnoId` (T-14) permite reagendar el MISMO turno sin que su propio
+   * horario anterior cuente como solapamiento.
    */
   async hayTurnoActivoQueSolapa(
     db: Database,
     tenantId: string,
     inicio: Date,
     fin: Date,
+    excluirTurnoId?: string,
   ): Promise<boolean> {
     const filas = await db
       .select({ id: turnos.id })
@@ -54,6 +101,9 @@ export const turnoRepository = {
             TurnoEstado.Confirmado,
           ]),
           sql`tstzrange(${turnos.fecha_hora_inicio}, ${turnos.fecha_hora_fin}) && tstzrange(${inicio}, ${fin})`,
+          ...(excluirTurnoId === undefined
+            ? []
+            : [sql`${turnos.id} <> ${excluirTurnoId}`]),
         ),
       )
       .limit(1);
@@ -183,32 +233,45 @@ export const turnoRepository = {
   },
 
   /**
-   * Turno + servicio + cliente por `token_hash` (T-11). El token es la
-   * derivación implícita turno → tenant (RB-INT-02): `token_hash` es único
-   * global, así que esta lectura NO necesita tenant_id; toda mutación
+   * Turno + servicio + cliente + negocio por `token_hash` (T-11/T-14). El
+   * token es la derivación implícita turno → tenant (RB-INT-02): `token_hash`
+   * es único global, así que esta lectura NO necesita tenant_id; toda mutación
    * posterior sí lo exige (RB-INT-01). Devuelve `undefined` si el token no
    * corresponde a ningún turno (CMR-S3: respuesta genérica, sin revelar).
    */
   async turnoGestionPorTokenHash(
     db: Database,
     tokenHash: string,
-  ): Promise<TurnoGestionFila | undefined> {
+  ): Promise<TurnoConContexto | undefined> {
     const filas = await db
-      .select({
-        id: turnos.id,
-        tenant_id: turnos.tenant_id,
-        estado: turnos.estado,
-        fecha_hora_inicio: turnos.fecha_hora_inicio,
-        fecha_hora_fin: turnos.fecha_hora_fin,
-        cliente_id: turnos.cliente_id,
-        servicio_id: turnos.servicio_id,
-        servicio: servicios.nombre,
-        cliente_nombre: clientes.nombre,
-      })
+      .select(COLUMNAS_CONTEXTO)
       .from(turnos)
       .innerJoin(clientes, eq(clientes.id, turnos.cliente_id))
       .innerJoin(servicios, eq(servicios.id, turnos.servicio_id))
+      .innerJoin(tenants, eq(tenants.id, turnos.tenant_id))
       .where(eq(turnos.token_hash, tokenHash))
+      .limit(1);
+    return filas[0];
+  },
+
+  /**
+   * Turno + contexto por id DENTRO del tenant (T-14, acciones de negocio).
+   * `undefined` si no existe o es de otro tenant (404 — INT-S1).
+   */
+  async turnoConContextoPorId(
+    db: Database,
+    tenantId: string,
+    turnoId: string,
+  ): Promise<TurnoConContexto | undefined> {
+    const filas = await db
+      .select(COLUMNAS_CONTEXTO)
+      .from(turnos)
+      .innerJoin(clientes, eq(clientes.id, turnos.cliente_id))
+      .innerJoin(servicios, eq(servicios.id, turnos.servicio_id))
+      .innerJoin(tenants, eq(tenants.id, turnos.tenant_id))
+      .where(
+        and(eq(turnos.id, turnoId), eq(turnos.tenant_id, tenantId)),
+      )
       .limit(1);
     return filas[0];
   },
@@ -253,6 +316,79 @@ export const turnoRepository = {
         and(eq(turnos.id, turnoId), eq(turnos.tenant_id, tenantId)),
       )
       .limit(1);
+    return filas[0];
+  },
+
+  /**
+   * Transición condicional idempotente `activo → nuevoEstado` (T-14): solo
+   * actualiza si el turno sigue en pendiente/confirmado (RB-CRG-06/EC-12).
+   * `undefined` si ya estaba en un estado terminal (nada que escribir → sin
+   * evento). Scoped por tenant_id (RB-INT-01). `motivo` opcional: se escribe
+   * solo cuando se pasa explícitamente (cancelación de negocio, RB-CRG-03).
+   */
+  async transicionarSiActivo(
+    db: Database,
+    tenantId: string,
+    turnoId: string,
+    nuevoEstado: TurnoEstado,
+    motivo?: string | null,
+  ): Promise<{ id: string; estado: TurnoEstado } | undefined> {
+    const cambios: {
+      estado: TurnoEstado;
+      updated_at: Date;
+      motivo?: string | null;
+    } = { estado: nuevoEstado, updated_at: new Date() };
+    if (motivo !== undefined) cambios.motivo = motivo;
+    const filas = await db
+      .update(turnos)
+      .set(cambios)
+      .where(
+        and(
+          eq(turnos.id, turnoId),
+          eq(turnos.tenant_id, tenantId),
+          inArray(turnos.estado, ESTADOS_ACTIVOS),
+        ),
+      )
+      .returning({ id: turnos.id, estado: turnos.estado });
+    return filas[0];
+  },
+
+  /**
+   * Reagenda el MISMO turno (RB-CRG-04): nueva fecha/hora conservando id,
+   * cliente, servicio y estado. Solo desde un estado activo (terminal → sin
+   * fila). Scoped por tenant_id. La atomicidad la garantiza la transacción
+   * del llamador (libera el slot anterior + reclama el nuevo, CA-CRG-03).
+   */
+  async reagendarTurno(
+    db: Database,
+    tenantId: string,
+    turnoId: string,
+    fechaHoraInicio: Date,
+    fechaHoraFin: Date,
+    motivo?: string | null,
+  ): Promise<{ id: string; estado: TurnoEstado } | undefined> {
+    const cambios: {
+      fecha_hora_inicio: Date;
+      fecha_hora_fin: Date;
+      updated_at: Date;
+      motivo?: string | null;
+    } = {
+      fecha_hora_inicio: fechaHoraInicio,
+      fecha_hora_fin: fechaHoraFin,
+      updated_at: new Date(),
+    };
+    if (motivo !== undefined) cambios.motivo = motivo;
+    const filas = await db
+      .update(turnos)
+      .set(cambios)
+      .where(
+        and(
+          eq(turnos.id, turnoId),
+          eq(turnos.tenant_id, tenantId),
+          inArray(turnos.estado, ESTADOS_ACTIVOS),
+        ),
+      )
+      .returning({ id: turnos.id, estado: turnos.estado });
     return filas[0];
   },
 };

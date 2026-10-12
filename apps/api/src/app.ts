@@ -6,6 +6,8 @@ import type { Env } from "./config/env";
 import { createCheckDb, createDb, type CheckDb, type Database } from "./db";
 import { createErrorHandler, NotFoundError } from "./infra/errors";
 import { buildLoggerOptions, nuevoRequestId } from "./infra/logger";
+import { crearNotificationService } from "./notificaciones/notificationService";
+import type { NotificationService } from "./notificaciones/notificationService";
 import { authRoutes } from "./routes/auth";
 import { healthRoutes } from "./routes/health";
 import { agendaRoutes } from "./routes/agenda";
@@ -22,6 +24,11 @@ export interface AppDeps {
   checkDb?: CheckDb;
   /** Conexión Drizzle inyectable para tests; por defecto deriva de DATABASE_URL. */
   db?: Database;
+  /**
+   * NotificationService inyectable (RB-CRG-07); por defecto se construye del
+   * entorno (`NOTIFICATION_CHANNEL`). Inyectable en tests con un espía.
+   */
+  notificaciones?: NotificationService;
 }
 
 /**
@@ -47,6 +54,8 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
 
   const db = deps.db ?? createDb(deps.env.DATABASE_URL);
+  const notificaciones =
+    deps.notificaciones ?? crearNotificationService(deps.env, app.log);
 
   // Sesiones opacas del operador (cookie `sid`, RB-VNG-05).
   app.register(cookie);
@@ -58,7 +67,7 @@ export async function buildApp(deps: AppDeps): Promise<FastifyInstance> {
   });
   app.register(authRoutes, { db, env: deps.env });
   app.register(agendaRoutes, { db, env: deps.env });
-  app.register(turnosRoutes, { db, env: deps.env });
+  app.register(turnosRoutes, { db, env: deps.env, notificaciones });
 
   return app;
 }

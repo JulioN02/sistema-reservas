@@ -111,9 +111,10 @@ async function primerSlotLibre(
   return { slot_key: slot.slot_key, inicio: slot.fecha_hora_inicio };
 }
 
-/** Servicio de 30 min del seed, con su nombre (para TurnoGestion). */
+/** Servicio del seed por duración (default 30 min), con su nombre. */
 async function primerServicio(
   app: FastifyInstance,
+  duracionMin = 30,
 ): Promise<{ id: string; duracion_min: number; nombre: string }> {
   const res = await app.inject({ method: "GET", url: "/api/v1/servicios" });
   expect(res.statusCode).toBe(200);
@@ -122,8 +123,10 @@ async function primerServicio(
     duracion_min: number;
     nombre: string;
   }>;
-  const servicio = servicios.find((s) => s.duracion_min === 30);
-  if (servicio === undefined) throw new Error("sin servicio de 30 min en seed");
+  const servicio = servicios.find((s) => s.duracion_min === duracionMin);
+  if (servicio === undefined) {
+    throw new Error(`sin servicio de ${duracionMin} min en seed`);
+  }
   return servicio;
 }
 
@@ -252,18 +255,26 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
       const gestion = await obtenerGestion(app, token);
       expect(gestion.statusCode).toBe(200);
       const cuerpo = gestion.json() as Record<string, unknown>;
-      // Contrato: exactamente {estado, servicio, fecha_hora_inicio,
-      // fecha_hora_fin, cliente_nombre} — sin tenant_id (CA-INT-04).
+      // Contrato: exactamente {estado, servicio, servicio_id, zona_horaria,
+      // fecha_hora_inicio, fecha_hora_fin, cliente_nombre} — sin tenant_id
+      // (CA-INT-04). servicio_id + zona_horaria permiten resolver el contexto
+      // del turno por id (no por nombre) en la SPA.
       expect(Object.keys(cuerpo).sort()).toEqual([
         "cliente_nombre",
         "estado",
         "fecha_hora_fin",
         "fecha_hora_inicio",
         "servicio",
+        "servicio_id",
+        "zona_horaria",
       ]);
       expect(cuerpo.estado).toBe("pendiente");
       expect(cuerpo.servicio).toBe(servicio.nombre);
+      expect(cuerpo.servicio_id).toBe(servicio.id);
+      expect(cuerpo.zona_horaria).toBe("America/Argentina/Buenos_Aires");
       expect(cuerpo.cliente_nombre).toBe("Laura Pérez");
+      // Sin fuga de tenant_id en la respuesta pública (CA-INT-04).
+      expect(cuerpo).not.toHaveProperty("tenant_id");
 
       // POST confirmar → 200 {turno_id, estado: confirmado}.
       const confirmado = await confirmar(app, token);
@@ -291,6 +302,27 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
       const despues = await obtenerGestion(app, token);
       expect(despues.statusCode).toBe(200);
       expect((despues.json() as { estado: string }).estado).toBe("confirmado");
+
+      await app.close();
+    });
+
+    it("TurnoGestion.servicio_id refleja el servicio reservado (no hardcode): servicio de 45 min", async () => {
+      const db = await prepararBd();
+      const app = await crearApp(db);
+      const servicio = await primerServicio(app, 45);
+      const creada = await reservar(app, servicio.id, {
+        nombre: "Sofía Luna",
+        email: "sofia@example.com",
+      });
+
+      const token = tokenDe(creada.enlace_gestion);
+      const gestion = await obtenerGestion(app, token);
+      expect(gestion.statusCode).toBe(200);
+      const cuerpo = gestion.json() as Record<string, unknown>;
+      // Triangulación: el id/zona vienen del turno reservado, no del seed 30 min.
+      expect(cuerpo.servicio_id).toBe(servicio.id);
+      expect(cuerpo.servicio).toBe(servicio.nombre);
+      expect(cuerpo.zona_horaria).toBe("America/Argentina/Buenos_Aires");
 
       await app.close();
     });
