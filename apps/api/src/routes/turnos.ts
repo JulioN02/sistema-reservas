@@ -14,8 +14,9 @@ import { authService } from "../services/authService";
  *   `security: [{}, cookieAuth]`): con cookie válida inyecta
  *   `request.sesion` (tenant del operador); sin cookie → flujo público
  *   (DEFAULT_TENANT_SLUG). Nunca 401 en este path.
- * - Enlace de gestión (token opaco): GET /turnos/{token}, POST confirmar/
- *   cancelar/reagendar.
+ * - Enlace de gestión (token opaco): GET /turnos/{param} (token público o id
+ *   de negocio — T-15), POST confirmar/cancelar/reagendar.
+ * - Historial de negocio: GET /turnos (T-15, sesión obligatoria).
  * - POST /turnos/{id}/acciones (negocio, sesión obligatoria): confirmar/
  *   cancelar/completado/no_show (T-14).
  */
@@ -59,10 +60,21 @@ export const turnosRoutes: FastifyPluginAsync<TurnosRouteOptions> = async (
     { preHandler: sesionOpcional(opts.db) },
     controller.crearTurno,
   );
-  // Enlace de gestión (T-11/T-14, contrato §4.2 — token opaco ≥128 bits,
-  // RB-CMR-01): GET consulta TurnoGestion; POST confirmar/cancelar/reagendar
-  // son idempotentes y liberan/reclaman el slot en la misma tx (RB-CRG-04).
-  app.get("/api/v1/turnos/:token", controller.obtenerPorToken);
+  // Historial de negocio (T-15, sesión obligatoria; 401 sin cookie — VNG-S7).
+  app.get(
+    "/api/v1/turnos",
+    { preHandler: requireSession },
+    controller.historialTurnos,
+  );
+  // Path compartido (T-11/T-15): Fastify no admite dos rutas con el mismo
+  // patrón `/turnos/:x`, así que `/turnos/{token}` (público) y `/turnos/{id}`
+  // (negocio) se resuelven en un único handler que discrimina por la forma
+  // del parámetro. `sesionOpcional` inyecta la sesión si hay cookie válida.
+  app.get(
+    "/api/v1/turnos/:param",
+    { preHandler: sesionOpcional(opts.db) },
+    controller.obtenerTurno,
+  );
   app.post("/api/v1/turnos/:token/confirmar", controller.confirmarTurno);
   app.post("/api/v1/turnos/:token/cancelar", controller.cancelarTurno);
   app.post("/api/v1/turnos/:token/reagendar", controller.reagendarTurno);

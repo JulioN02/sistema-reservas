@@ -16,6 +16,7 @@ import { authService } from "../services/authService";
  * - GET /api/v1/agenda    → 200 AgendaResponse (400/422/404).
  *
  * Negocio (T-09, sesión obligatoria — 401 sin cookie):
+ * - GET /api/v1/agenda/dia (T-15): turnos del día local del negocio.
  * - GET/POST/PUT/DELETE /api/v1/agenda/horarios (409 solapamiento).
  * - GET/POST/DELETE     /api/v1/agenda/bloques (409 pisa turnos).
  * - POST/PUT/DELETE     /api/v1/servicios + PATCH /servicios/{id}/parametros.
@@ -56,6 +57,12 @@ export const agendaRoutes: FastifyPluginAsync<AgendaRouteOptions> = async (
     controller.listarServicios,
   );
   app.get("/api/v1/agenda", controller.calcularAgenda);
+  // Vista del día del negocio (T-15, sesión obligatoria; 401 sin cookie).
+  app.get(
+    "/api/v1/agenda/dia",
+    { preHandler: requireSession },
+    controller.agendaDelDia,
+  );
 
   // Negocio — horarios recurrentes
   app.get(
