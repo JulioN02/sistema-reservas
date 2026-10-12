@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   fechaEnZona,
+  finDelDiaUtc,
   formatearFechaLarga,
   formatearHoraLocal,
   horaDeSlotKey,
+  inicioDelDiaUtc,
   sumarDias,
   ventanaDeReserva,
 } from "../lib/fechas";
@@ -50,5 +52,20 @@ describe("fechas — utilidades puras (zona del negocio)", () => {
 
   it("horaDeSlotKey extrae el inicio y lo presenta en hora local", () => {
     expect(horaDeSlotKey("2026-10-05T09:30:00.000Z|svc-1", ZONA)).toBe("06:30");
+  });
+
+  it("inicioDelDiaUtc convierte la medianoche local del negocio a UTC", () => {
+    // 00:00 del 5 de octubre en Buenos Aires (UTC-3) = 03:00 UTC.
+    expect(inicioDelDiaUtc("2026-10-05", ZONA)).toBe(
+      "2026-10-05T03:00:00.000Z",
+    );
+    // En UTC la medianoche coincide con el inicio del día.
+    expect(inicioDelDiaUtc("2026-10-05", "UTC")).toBe(
+      "2026-10-05T00:00:00.000Z",
+    );
+  });
+
+  it("finDelDiaUtc es el inicio del día siguiente (límite exclusivo)", () => {
+    expect(finDelDiaUtc("2026-10-05", ZONA)).toBe("2026-10-06T03:00:00.000Z");
   });
 });
