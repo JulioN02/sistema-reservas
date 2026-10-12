@@ -1,11 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  apiClient,
-  ApiError,
-  mensajeDeError,
-  resolverServicioPorNombre,
-} from "../lib/apiClient";
-import type { ServicioPublico } from "../lib/apiClient";
+import { apiClient, ApiError, mensajeDeError } from "../lib/apiClient";
 import { instalarFetchFalso, respuestaJson } from "./fetchMock";
 
 afterEach(() => {
@@ -91,21 +85,5 @@ describe("apiClient — helpers puros", () => {
     expect(mensajeDeError(error)).toBe(
       "El slot solicitado ya no está disponible.",
     );
-  });
-
-  it("resolverServicioPorNombre ubica el servicio por nombre", () => {
-    const servicios: ServicioPublico[] = [
-      {
-        id: "svc-1",
-        nombre: "Corte de cabello",
-        duracion_min: 30,
-        precio: null,
-        zona_horaria: "America/Argentina/Buenos_Aires",
-      },
-    ];
-    expect(resolverServicioPorNombre(servicios, "Corte de cabello")?.id).toBe(
-      "svc-1",
-    );
-    expect(resolverServicioPorNombre(servicios, "Otro")).toBeUndefined();
   });
 });

@@ -113,16 +113,3 @@ export function mensajeDeError(error: unknown): string {
   if (error instanceof ApiError) return error.problem.detail;
   return "Ocurrió un error inesperado. Intenta nuevamente.";
 }
-
-/**
- * Resuelve el servicio de la oferta por nombre. Necesario porque
- * `TurnoGestion` no expone `servicio_id` ni `zona_horaria` (gap de contrato
- * reportado): la página de gestión usa la lista pública para ubicar el
- * servicio del turno y presentar la hora local del negocio.
- */
-export function resolverServicioPorNombre(
-  servicios: ServicioPublico[],
-  nombre: string,
-): ServicioPublico | undefined {
-  return servicios.find((servicio) => servicio.nombre === nombre);
-}

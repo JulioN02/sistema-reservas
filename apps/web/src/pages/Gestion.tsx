@@ -1,14 +1,9 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router";
 import { SlotPicker } from "../components/SlotPicker";
-import {
-  apiClient,
-  mensajeDeError,
-  resolverServicioPorNombre,
-} from "../lib/apiClient";
+import { apiClient, mensajeDeError } from "../lib/apiClient";
 import type {
   DiaAgenda,
-  ServicioPublico,
   Slot,
   TurnoAccionResultado,
   TurnoGestion,
@@ -28,10 +23,10 @@ import {
  * cancelar y reagendar (POST .../cancelar y .../reagendar — endpoints
  * implementados en T-14; aquí se cablean al contrato).
  *
- * Gap de contrato: `TurnoGestion` no expone `servicio_id` ni `zona_horaria`.
- * Se resuelve el servicio del turno desde la lista pública (match por nombre)
- * para presentar la hora local del negocio y habilitar el selector de
- * reagenda. Reportado como desviación.
+ * El contexto del turno se resuelve por `servicio_id` + `zona_horaria` del
+ * propio `TurnoGestion` (revisión aditiva del contrato): ya no se infiere el
+ * servicio por nombre desde la lista pública, evitando colisiones de nombres
+ * y servicios inactivos.
  */
 
 const DIAS_VENTANA = 7;
@@ -41,7 +36,6 @@ export function Gestion() {
 
   const [turno, setTurno] = useState<TurnoGestion | null>(null);
   const [estado, setEstado] = useState<TurnoGestion["estado"] | null>(null);
-  const [servicio, setServicio] = useState<ServicioPublico | null>(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [mensaje, setMensaje] = useState<string | null>(null);
@@ -54,17 +48,12 @@ export function Gestion() {
     if (token === undefined) return;
     let activo = true;
     setCargando(true);
-    Promise.all([
-      apiClient.obtenerTurnoPorToken(token),
-      apiClient.listarServicios(),
-    ])
-      .then(([datosTurno, servicios]) => {
+    apiClient
+      .obtenerTurnoPorToken(token)
+      .then((datosTurno) => {
         if (!activo) return;
         setTurno(datosTurno);
         setEstado(datosTurno.estado);
-        setServicio(
-          resolverServicioPorNombre(servicios, datosTurno.servicio) ?? null,
-        );
         setCargando(false);
       })
       .catch((fallo: unknown) => {
@@ -98,14 +87,14 @@ export function Gestion() {
   function abrirReagendar() {
     setReagendarAbierto(true);
     setError(null);
-    if (servicio === null) return;
+    if (turno === null) return;
     const { desde, hasta } = ventanaDeReserva(
       new Date(),
-      servicio.zona_horaria,
+      turno.zona_horaria,
       DIAS_VENTANA,
     );
     apiClient
-      .calcularAgenda({ servicio_id: servicio.id, desde, hasta })
+      .calcularAgenda({ servicio_id: turno.servicio_id, desde, hasta })
       .then((agenda) => setDias(agenda.dias))
       .catch((fallo: unknown) => setError(mensajeDeError(fallo)));
   }
@@ -157,7 +146,7 @@ export function Gestion() {
     );
   }
 
-  const zonaHoraria = servicio?.zona_horaria ?? "UTC";
+  const zonaHoraria = turno.zona_horaria;
   const fechaLocal = fechaEnZona(new Date(turno.fecha_hora_inicio), zonaHoraria);
 
   return (

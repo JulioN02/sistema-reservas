@@ -8,6 +8,8 @@ import { instalarFetchFalso, respuestaJson } from "./fetchMock";
 const TURNO_GESTION: TurnoGestion = {
   estado: "pendiente",
   servicio: "Corte de cabello",
+  servicio_id: "svc-1",
+  zona_horaria: "America/Argentina/Buenos_Aires",
   fecha_hora_inicio: "2026-10-05T09:00:00.000Z",
   fecha_hora_fin: "2026-10-05T09:30:00.000Z",
   cliente_nombre: "Ana Pérez",
