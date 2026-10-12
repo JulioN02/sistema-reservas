@@ -8,9 +8,12 @@ import type { components } from "@sistema-reservas/contracts";
  */
 
 export type ServicioPublico = components["schemas"]["ServicioPublico"];
+export type Slot = components["schemas"]["Slot"];
+export type DiaAgenda = components["schemas"]["DiaAgenda"];
 export type AgendaResponse = components["schemas"]["AgendaResponse"];
 export type TurnoCreado = components["schemas"]["TurnoCreado"];
 export type TurnoGestion = components["schemas"]["TurnoGestion"];
+export type TurnoAccionResultado = components["schemas"]["TurnoAccionResultado"];
 export type ErrorContract = components["schemas"]["Error"];
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? "/api/v1";
@@ -79,4 +82,47 @@ export const apiClient = {
   /** GET /api/v1/turnos/{token} — estado del turno por enlace de gestión. */
   obtenerTurnoPorToken: (token: string) =>
     request<TurnoGestion>(`/turnos/${encodeURIComponent(token)}`),
+
+  /** POST /api/v1/turnos/{token}/confirmar — confirmación idempotente. */
+  confirmarTurno: (token: string) =>
+    request<TurnoAccionResultado>(
+      `/turnos/${encodeURIComponent(token)}/confirmar`,
+      { method: "POST" },
+    ),
+
+  /** POST /api/v1/turnos/{token}/cancelar — cancelación dentro de gracia. */
+  cancelarTurno: (token: string) =>
+    request<TurnoAccionResultado>(
+      `/turnos/${encodeURIComponent(token)}/cancelar`,
+      { method: "POST" },
+    ),
+
+  /** POST /api/v1/turnos/{token}/reagendar — cambio atómico a un nuevo slot. */
+  reagendarTurno: (token: string, slotKey: string) =>
+    request<TurnoAccionResultado>(
+      `/turnos/${encodeURIComponent(token)}/reagendar`,
+      { method: "POST", body: JSON.stringify({ slot_key: slotKey }) },
+    ),
 };
+
+/**
+ * Mensaje legible de un error de la API (problem+json `detail`) o genérico
+ * si no es un `ApiError`. Nunca expone internals.
+ */
+export function mensajeDeError(error: unknown): string {
+  if (error instanceof ApiError) return error.problem.detail;
+  return "Ocurrió un error inesperado. Intenta nuevamente.";
+}
+
+/**
+ * Resuelve el servicio de la oferta por nombre. Necesario porque
+ * `TurnoGestion` no expone `servicio_id` ni `zona_horaria` (gap de contrato
+ * reportado): la página de gestión usa la lista pública para ubicar el
+ * servicio del turno y presentar la hora local del negocio.
+ */
+export function resolverServicioPorNombre(
+  servicios: ServicioPublico[],
+  nombre: string,
+): ServicioPublico | undefined {
+  return servicios.find((servicio) => servicio.nombre === nombre);
+}
