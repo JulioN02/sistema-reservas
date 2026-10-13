@@ -1,13 +1,30 @@
+# Docker Compose — sistema-reservas (stack local completo)
+#
+#  - `db`      : PostgreSQL 16 de desarrollo (tenant demo).
+#  - `db-test` : PostgreSQL 16 para los tests de integración (TEST_DATABASE_URL).
+#  - `migrate` : servicio one-shot que aplica migraciones + seed ANTES del API.
+#  - `api`     : API Fastify (imagen multi-stage, apps/api/Dockerfile).
+#  - `web`     : SPA servida por Nginx no-root (apps/web/Dockerfile).
+#
+# Flujo:  docker compose up  →  db (healthy) → migrate (migrate+seed) → api (healthy) → web.
+# CA-INT-03: con las imágenes ya construidas, `docker compose up` aplica
+# migraciones + seed y deja api+web+db arriba en < 2 min.
+#
+# Puertos configurables por variables (defaults entre llaves). El override local
+# `docker-compose.override.yml` (gitignored) remapea los puertos de Postgres.
+# Para un stack aislado (p. ej. E2E) usar un proyecto y puertos distintos:
+#   API_PORT=3100 WEB_PORT=8180 POSTGRES_PORT=5441 POSTGRES_TEST_PORT=5442 \
+#     docker compose -p sistema-reservas-e2e -f docker-compose.yml up -d --build
+
 services:
   db:
     image: postgres:16-alpine
-    container_name: sistema-reservas-db
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: sistema_reservas
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -18,18 +35,97 @@ services:
 
   db-test:
     image: postgres:16-alpine
-    container_name: sistema-reservas-db-test
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: sistema_reservas_test
     ports:
-      - "5433:5432"
+      - "${POSTGRES_TEST_PORT:-5433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d sistema_reservas_test"]
       interval: 5s
       timeout: 3s
       retries: 10
+
+  # One-shot: aplica las migraciones versionadas y el seed idempotente.
+  migrate:
+    image: sistema-reservas-api:local
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    command: >
+      sh -c "pnpm --filter @sistema-reservas/api db:migrate &&
+             pnpm --filter @sistema-reservas/api db:seed"
+    environment: &api-env
+      NODE_ENV: production
+      DATABASE_URL: postgres://postgres:postgres@db:5432/sistema_reservas
+      DEFAULT_TENANT_SLUG: ${DEFAULT_TENANT_SLUG:-demo}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:8080}
+      COOKIE_SECURE: "false"
+      SESSION_TTL_DAYS: "7"
+      REMINDER_LEAD_MIN: "1440"
+      # `log` (default, sin proveedor) o `email` (Resend). Para email, agregar
+      # RESEND_API_KEY y RESEND_FROM al servicio `api` (NO definirlos vacíos:
+      # el canal de email se activa solo con ambos presentes y no vacíos).
+      NOTIFICATION_CHANNEL: ${NOTIFICATION_CHANNEL:-log}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      OPERADOR_EMAIL: ${OPERADOR_EMAIL:-operador@demo.local}
+      OPERADOR_PASSWORD: ${OPERADOR_PASSWORD:-demo-password-123}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    image: sistema-reservas-api:local
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      <<: *api-env
+      PORT: "3000"
+    ports:
+      - "${API_PORT:-3000}:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 5
+    restart: unless-stopped
+
+  web:
+    image: sistema-reservas-web:local
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        # Base del API inyectada en el bundle (BUILD-TIME). Default `/api/v1`
+        # (same-origin, proxy Nginx). En Railway pasar la URL pública del API.
+        # Nunca vacío: rompería la base del apiClient.
+        VITE_API_URL: ${VITE_API_URL:-/api/v1}
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 5
+    restart: unless-stopped
 
 volumes:
   pgdata:

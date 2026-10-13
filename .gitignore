@@ -15,6 +15,10 @@ build/
 # Test coverage
 coverage/
 
+# Playwright (E2E)
+playwright-report/
+test-results/
+
 # Logs
 *.log
 npm-debug.log*

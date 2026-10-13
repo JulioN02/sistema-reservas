@@ -76,15 +76,19 @@ function fechaISO(dias: number): string {
   return new Date(Date.now() + dias * 86_400_000).toISOString().slice(0, 10);
 }
 
-/** Todos los slots libres del servicio en [hoy, hoy + dias), ordenados. */
+/**
+ * Todos los slots libres del servicio en [hoy + `desdeDias`, + `dias`),
+ * ordenados. `desdeDias` = 0 (default) consulta desde hoy.
+ */
 async function slotsLibres(
   app: FastifyInstance,
   servicioId: string,
   dias: number,
+  desdeDias = 0,
 ): Promise<Array<{ slot_key: string; fecha_hora_inicio: string }>> {
   const res = await app.inject({
     method: "GET",
-    url: `/api/v1/agenda?servicio_id=${servicioId}&desde=${fechaISO(0)}&hasta=${fechaISO(dias)}`,
+    url: `/api/v1/agenda?servicio_id=${servicioId}&desde=${fechaISO(desdeDias)}&hasta=${fechaISO(desdeDias + dias)}`,
   });
   expect(res.statusCode).toBe(200);
   const cuerpo = res.json() as {
@@ -119,6 +123,32 @@ async function primerSlotLibre(
   );
   if (slot === undefined) {
     throw new Error("sin slots libres en el rango consultado");
+  }
+  return { slot_key: slot.slot_key, inicio: slot.fecha_hora_inicio };
+}
+
+/**
+ * Primer slot libre de un día laboral ESTRICTAMENTE futuro (ventana desde
+ * mañana). A diferencia de `primerSlotLibre`, no toma el primer hueco de
+ * "hoy": eso volvía flaky a RST-S3, porque cuando el primer slot del día
+ * caía contra el cierre, el rango del escenario (+30 min con un servicio de
+ * 45 min) cruzaba el fin de horario → `slotEnHorario` fallaba y la respuesta
+ * era 409 en vez del 201 esperado.
+ *
+ * Un día futuro ofrece el día completo desde su apertura, de modo que el
+ * inicio base y sus rangos +15/+30 min siempre caben en el horario, con
+ * independencia de la hora a la que se corra el test. Misma técnica que el
+ * fix previo de agenda/recordatorios (a612e2c): fechas relativas, slots
+ * garantizados futuros.
+ */
+async function primerSlotLibreDiaFuturo(
+  app: FastifyInstance,
+  servicioId: string,
+): Promise<{ slot_key: string; inicio: string }> {
+  const slots = await slotsLibres(app, servicioId, 8, 1);
+  const slot = slots[0];
+  if (slot === undefined) {
+    throw new Error("sin slots libres en la próxima semana");
   }
   return { slot_key: slot.slot_key, inicio: slot.fecha_hora_inicio };
 }
@@ -400,9 +430,10 @@ describe.skipIf(!process.env.TEST_DATABASE_URL)(
       const servicio30 = await primerServicio(app);
       const servicio45 = await servicioPorDuracion(app, 45);
 
-      // El primer slot libre del día (09:00 local = 12:00Z): margen holgado
-      // para los rangos +15/+30 min del escenario sin tocar el cierre.
-      const base = await primerSlotLibre(app, servicio30.id);
+      // Día laboral ESTRICTAMENTE futuro (ventana desde mañana): el día
+      // completo está ofrecido, así que el inicio base y sus rangos +15/+30
+      // min no tocan el cierre. Test independiente de la hora del día.
+      const base = await primerSlotLibreDiaFuturo(app, servicio30.id);
       const inicioBase = new Date(base.inicio).getTime();
 
       // Turno A 30 min en `base` (ej.: 12:00–12:30Z).
