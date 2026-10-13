@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
     "build": "tsc --noEmit",
     "lint": "eslint src",
     "test": "vitest run",
@@ -33,13 +34,13 @@
     "pg": "^8.23.1",
     "pino": "^9.14.0",
     "resend": "^6.32.1",
+    "tsx": "^4.19.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",
     "@types/pg": "^8.23.1",
     "@vitest/coverage-v8": "3.2.7",
-    "tsx": "^4.19.0",
     "yaml": "2.7.0"
   }
 }

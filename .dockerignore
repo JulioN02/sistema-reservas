@@ -1,0 +1,33 @@
+# Contexto de build Docker (raíz del monorepo).
+# Excluye artefactos locales para builds reproducibles y rápidos.
+
+.git
+.gitignore
+node_modules
+**/node_modules
+
+# Builds y cobertura
+**/dist
+**/build
+**/coverage
+**/*.tsbuildinfo
+
+# Entorno (los .env NO viajan en la imagen; se inyectan por variables)
+.env
+.env.*
+!.env.example
+
+# Docker local y documentación
+docker-compose*.yml
+docs
+
+# E2E / Playwright (no necesarios para construir las imágenes)
+**/e2e
+**/playwright-report
+**/test-results
+
+# Editor / OS
+.idea
+.vscode
+.DS_Store
+*.log

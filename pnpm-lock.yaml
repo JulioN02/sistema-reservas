@@ -74,6 +74,9 @@ importers:
       resend:
         specifier: ^6.32.1
         version: 6.32.1
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
       zod:
         specifier: ^3.25.76
         version: 3.25.76
@@ -87,9 +90,6 @@ importers:
       '@vitest/coverage-v8':
         specifier: 3.2.7
         version: 3.2.7(vitest@3.2.7(@types/node@22.20.5)(jsdom@26.1.0)(tsx@4.23.15)(yaml@2.7.0))
-      tsx:
-        specifier: ^4.19.0
-        version: 4.23.15
       yaml:
         specifier: 2.7.0
         version: 2.7.0
