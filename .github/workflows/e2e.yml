@@ -1,0 +1,91 @@
+name: E2E (Playwright)
+
+# Slice vertical #1 (T-24): reserva → confirmación → cancelación; login → vista
+# del día; flujo sin email (LogChannel, CA-CMR-04). Se ejecuta contra el stack
+# Docker Compose completo (api + web + db), en puertos aislados.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: E2E (docker compose + Playwright)
+    runs-on: ubuntu-latest
+    env:
+      # Stack aislado: no colisiona con otros servicios del runner.
+      API_PORT: "3100"
+      WEB_PORT: "8180"
+      POSTGRES_PORT: "5441"
+      POSTGRES_TEST_PORT: "5442"
+      CORS_ORIGIN: "http://localhost:8180"
+      E2E_BASE_URL: "http://localhost:8180"
+      COMPOSE_PROJECT: sistema-reservas-e2e
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright browser (chromium)
+        run: pnpm --filter @sistema-reservas/web exec playwright install --with-deps chromium
+
+      - name: Build and start the stack
+        run: docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml up -d --build
+
+      - name: Wait for the API (health)
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS "http://localhost:${API_PORT}/api/v1/health" >/dev/null 2>&1; then
+              echo "API healthy"; exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::El API no quedó healthy a tiempo"
+          docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs
+          exit 1
+
+      - name: Wait for the web
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "http://localhost:${WEB_PORT}/" >/dev/null 2>&1; then
+              echo "Web up"; exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::El web no respondió a tiempo"
+          docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml logs
+          exit 1
+
+      - name: Run Playwright E2E
+        run: pnpm --filter @sistema-reservas/web e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: apps/web/playwright-report/
+          retention-days: 7
+
+      - name: Tear down the stack
+        if: always()
+        run: docker compose -p "$COMPOSE_PROJECT" -f docker-compose.yml down -v
