@@ -13,7 +13,8 @@ test.describe("Flujo público: reserva → confirmación → cancelación", () =
     const reserva = new ReservaPage(page);
     await reserva.abrir();
     await reserva.elegirPrimerServicio();
-    // Slot lejano → fuera de la ventana de gracia → la cancelación no da 403.
+    // Slot lejano → DENTRO de la ventana de gracia (inicio − ahora ≥ graciaMin)
+    // → la cancelación procede sin 403.
     await reserva.elegirSlotMasLejano();
     await reserva.completarDatos({
       nombre: "Ana Cliente",
