@@ -1,0 +1,49 @@
+{
+  "generado_por": "apps/api/src/db/seed-sintetico.ts (pnpm --filter @sistema-reservas/api db:seed:sintetico)",
+  "ancla_utc": "2026-10-07T15:00:00.000Z",
+  "zona_horaria": "America/Argentina/Buenos_Aires",
+  "semilla_prng": 20261007,
+  "nota": "KPIs esperados de GET /api/v1/metricas/resumen (spec A9) con el seed sintético. Los calcula el propio generador (cálculo manual documentado en seed-sintetico.ts), NO metricasService. El test MTE-S5 compara los CONTADOS y tasas (las etiquetas de semana ISO dependen del ancla). Regenerar con db:seed:sintetico si cambia el generador.",
+  "kpis": {
+    "reservas_por_semana": [
+      {
+        "semana": "2026-41",
+        "cantidad": 77
+      },
+      {
+        "semana": "2026-40",
+        "cantidad": 25
+      },
+      {
+        "semana": "2026-39",
+        "cantidad": 25
+      },
+      {
+        "semana": "2026-38",
+        "cantidad": 25
+      },
+      {
+        "semana": "2026-37",
+        "cantidad": 26
+      },
+      {
+        "semana": "2026-36",
+        "cantidad": 24
+      },
+      {
+        "semana": "2026-35",
+        "cantidad": 28
+      },
+      {
+        "semana": "2026-34",
+        "cantidad": 26
+      }
+    ],
+    "tasa_no_show": 0.42857142857142855,
+    "ocupacion_semana": 0.07854984894259819,
+    "cancelaciones": {
+      "cantidad": 10,
+      "tasa": 0.06578947368421052
+    }
+  }
+}
