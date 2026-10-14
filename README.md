@@ -3,7 +3,7 @@
 Monorepo del microproducto **Sistema de Reservas**: gestión de citas y turnos para
 negocios y profesionales que hoy atienden por WhatsApp y teléfono.
 
-> **Estado**: v1 completa · 6 batches integrados en `main` · ver [Estado del proyecto](#estado-del-proyecto)
+> **Estado**: v1 completa · 7 batches integrados en `main` · ver [Estado del proyecto](#estado-del-proyecto)
 > **Evidencia del producto**: [problem-discovery](docs/problem-discovery.md) · [privacidad](docs/privacidad.md) · [deploy](docs/deploy.md)
 
 ---
@@ -293,7 +293,7 @@ inventado).
 
 ## Estado del proyecto
 
-v1 completa. Seis batches integrados en `main` mediante PR:
+v1 completa. Siete batches integrados en `main` mediante PR:
 
 | Batch | PR | Alcance |
 |---|---|---|
@@ -303,9 +303,11 @@ v1 completa. Seis batches integrados en `main` mediante PR:
 | 4 — Web UI | #8 | flujo público de reserva + página de gestión del turno |
 | 5 — Panel + métricas | #10 | vista del día, historial, 4 KPIs, panel del negocio |
 | 6a — Hardening | #12 | seguridad, privacidad, concurrencia, cobertura, conformancia |
+| 6b — Cierre | #14 | seed sintético, Docker + deploy, E2E y documentación |
 
-El **batch 6b** (pulido de cierre: seed sintético, Docker + deploy, E2E y
-documentación) vive en la rama `feat/batch-6b-cierre`.
+El **batch 6b** quedó integrado en `main` con el PR #14 (merge `973d7cf`); las
+siete entregas (1, 2, 3, 4, 5, 6a y 6b) están en `main`. El cambio SDD
+`fundacion-producto`, que condujo la construcción de la v1, está **archivado**.
 
 Más evidencia del ciclo Product Engineer en este mismo folder:
 [ficha técnica y descubrimiento del problema](docs/problem-discovery.md) ·
