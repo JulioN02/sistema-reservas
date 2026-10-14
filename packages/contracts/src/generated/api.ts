@@ -1406,6 +1406,7 @@ export interface operations {
             };
             400: components["responses"]["SolicitudInvalida"];
             401: components["responses"]["NoAutorizado"];
+            404: components["responses"]["NoEncontrado"];
             422: components["responses"]["Validacion"];
             500: components["responses"]["ErrorInterno"];
         };
@@ -1497,12 +1498,7 @@ export interface operations {
     };
     resumenMetricas: {
         parameters: {
-            query?: {
-                /** @description Límite inferior del período (UTC). */
-                desde?: string;
-                /** @description Límite superior del período (UTC). */
-                hasta?: string;
-            };
+            query?: never;
             header?: never;
             path?: never;
             cookie?: never;
@@ -1519,6 +1515,7 @@ export interface operations {
                 };
             };
             401: components["responses"]["NoAutorizado"];
+            404: components["responses"]["NoEncontrado"];
             500: components["responses"]["ErrorInterno"];
         };
     };
