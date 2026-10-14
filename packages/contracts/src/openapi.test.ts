@@ -48,14 +48,14 @@ const inventario: Record<string, { metodos: Record<string, number[]> }> = {
     metodos: { get: [200, 401, 500], post: [201, 401, 409, 422, 500] },
   },
   "/agenda/bloques/{id}": { metodos: { delete: [204, 401, 404, 500] } },
-  "/agenda/dia": { metodos: { get: [200, 400, 401, 422, 500] } },
+  "/agenda/dia": { metodos: { get: [200, 400, 401, 404, 422, 500] } },
   "/servicios/{id}": {
     metodos: { put: [200, 401, 404, 409, 422, 500], delete: [204, 401, 404, 409, 500] },
   },
   "/servicios/{id}/parametros": {
     metodos: { patch: [200, 401, 404, 422, 500] },
   },
-  "/metricas/resumen": { metodos: { get: [200, 401, 500] } },
+  "/metricas/resumen": { metodos: { get: [200, 401, 404, 500] } },
   "/health": { metodos: { get: [200, 500] } },
 };
 

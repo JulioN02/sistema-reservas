@@ -710,6 +710,8 @@ paths:
           $ref: "#/components/responses/SolicitudInvalida"
         "401":
           $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
         "422":
           $ref: "#/components/responses/Validacion"
         "500":
@@ -822,21 +824,6 @@ paths:
       security:
         - cookieAuth: []
       tags: [metricas]
-      parameters:
-        - name: desde
-          in: query
-          required: false
-          description: Límite inferior del período (UTC).
-          schema:
-            type: string
-            format: date-time
-        - name: hasta
-          in: query
-          required: false
-          description: Límite superior del período (UTC).
-          schema:
-            type: string
-            format: date-time
       responses:
         "200":
           description: Resumen de métricas.
@@ -846,6 +833,8 @@ paths:
                 $ref: "#/components/schemas/MetricasResumen"
         "401":
           $ref: "#/components/responses/NoAutorizado"
+        "404":
+          $ref: "#/components/responses/NoEncontrado"
         "500":
           $ref: "#/components/responses/ErrorInterno"
   /health:
