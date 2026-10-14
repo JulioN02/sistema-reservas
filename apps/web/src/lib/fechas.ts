@@ -107,7 +107,15 @@ export function inicioDelDiaUtc(fecha: string, zonaHoraria: string): string {
   return new Date(medianocheUtc - offset * 60_000).toISOString();
 }
 
-/** Instante UTC del fin (exclusivo) del día `YYYY-MM-DD` en la zona del negocio. */
+/**
+ * Instante UTC del fin (inclusive) del día `YYYY-MM-DD` en la zona del negocio.
+ * El contrato trata `hasta` como un límite inclusivo, así que se devuelve el
+ * último milisegundo del día local (23:59:59.999), no la medianoche siguiente
+ * (que sería un límite exclusivo y produciría un off-by-one).
+ */
 export function finDelDiaUtc(fecha: string, zonaHoraria: string): string {
-  return inicioDelDiaUtc(sumarDias(fecha, 1), zonaHoraria);
+  const inicioSiguiente = new Date(
+    inicioDelDiaUtc(sumarDias(fecha, 1), zonaHoraria),
+  );
+  return new Date(inicioSiguiente.getTime() - 1).toISOString();
 }

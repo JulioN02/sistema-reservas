@@ -65,7 +65,8 @@ describe("fechas — utilidades puras (zona del negocio)", () => {
     );
   });
 
-  it("finDelDiaUtc es el inicio del día siguiente (límite exclusivo)", () => {
-    expect(finDelDiaUtc("2026-10-05", ZONA)).toBe("2026-10-06T03:00:00.000Z");
+  it("finDelDiaUtc es el último instante del día local (límite inclusivo)", () => {
+    // 23:59:59.999 del 5 de octubre en Buenos Aires (UTC-3) = 02:59:59.999 UTC del 6.
+    expect(finDelDiaUtc("2026-10-05", ZONA)).toBe("2026-10-06T02:59:59.999Z");
   });
 });
